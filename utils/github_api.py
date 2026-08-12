@@ -299,7 +299,34 @@ class GitHubAPI:
             out.extend(page)
         return out
 
-<<<<<<< HEAD
+    def get_collaborators(
+        self,
+        owner: str,
+        repo: str,
+        per_page: int = 100,
+        affiliation: Optional[str] = None,
+    ) -> list[dict]:
+        """
+        Return every person with access to the repository (paginated).
+
+        GET /repos/{owner}/{repo}/collaborators
+        ``affiliation`` filters by ``outside``, ``direct`` or ``all`` (default).
+        Each item includes the user's ``permissions`` (admin / push / pull).
+
+        Unlike /contributors (which only lists people with commits) this
+        endpoint returns the real collaborators, including people who have
+        been granted access but have not pushed anything yet.
+        """
+        params: dict[str, Any] = {}
+        if affiliation:
+            params["affiliation"] = affiliation
+        out: list[dict] = []
+        for page in self._iter_pages(
+            f"/repos/{owner}/{repo}/collaborators", params=params, per_page=per_page
+        ):
+            out.extend(page)
+        return out
+
     def get_repository_collaborators(self, owner: str, repo: str, per_page: int = 100) -> list[dict]:
         """
         Return the repository's actual collaborators via
@@ -342,10 +369,6 @@ class GitHubAPI:
             }
             for item in out
         ]
-
-    def get_collaborators(self, owner: str, repo: str, per_page: int = 100) -> list[dict]:
-        """Alias for `get_repository_collaborators` (kept for compatibility)."""
-        return self.get_repository_collaborators(owner, repo, per_page)
 
     def get_pending_invitations(self, owner: str, repo: str, per_page: int = 100) -> list[dict]:
         """
@@ -439,35 +462,6 @@ class GitHubAPI:
         if perms.get("triage"):
             return "triage"
         return "read"
-=======
-    def get_collaborators(
-        self,
-        owner: str,
-        repo: str,
-        per_page: int = 100,
-        affiliation: Optional[str] = None,
-    ) -> list[dict]:
-        """
-        Return every person with access to the repository (paginated).
-
-        GET /repos/{owner}/{repo}/collaborators
-        ``affiliation`` filters by ``outside``, ``direct`` or ``all`` (default).
-        Each item includes the user's ``permissions`` (admin / push / pull).
-
-        Unlike /contributors (which only lists people with commits) this
-        endpoint returns the real collaborators, including people who have
-        been granted access but have not pushed anything yet.
-        """
-        params: dict[str, Any] = {}
-        if affiliation:
-            params["affiliation"] = affiliation
-        out: list[dict] = []
-        for page in self._iter_pages(
-            f"/repos/{owner}/{repo}/collaborators", params=params, per_page=per_page
-        ):
-            out.extend(page)
-        return out
->>>>>>> f14184d (Update GitPulse team activity dashboard)
 
     def get_org_members(self, org: str, per_page: int = 100) -> list[dict]:
         """Return members of an organization (requires membership scope)."""
@@ -867,8 +861,7 @@ class GitHubAPI:
             if c.get("login")
         }
 
-<<<<<<< HEAD
-        # --- Team source: org team if configured, else repo collaborators ---
+        # --- Team source: REAL repository collaborators (not just contributors) ---
         # GitHub's /collaborators endpoint returns the actual members of the
         # repository (not just people who have committed), so the dashboard
         # shows everyone granted access. Invitations that have not been
@@ -876,88 +869,6 @@ class GitHubAPI:
         # invisible until they accept, and the repository owner is always
         # included. Contributors are used only when the token cannot list
         # collaborators at all.
-        members: list[dict[str, Any]] = []
-        team_name = settings.GITHUB_TEAM or ""
-
-        # Repo metadata is needed both to identify the owner (so the owner is
-        # always listed as a member) and for the final report, so fetch it
-        # once up front.
-        try:
-            repo_meta = self.get_repository(owner, repo)
-        except GitHubError:
-            repo_meta = {}
-
-        source = []
-        source_kind = "contributor"
-        if team_name:
-            try:
-                source = self.get_team_members(owner, team_name)
-                source_kind = "team member"
-            except GitHubError as exc:
-                logger.warning(
-                    "Team '%s' not accessible (%s); falling back to collaborators.",
-                    team_name, exc.message,
-                )
-                source = []
-        if not source:
-            try:
-                collaborators = self.get_repository_collaborators(owner, repo)
-            except GitHubError as exc:
-                logger.warning(
-                    "Could not list collaborators for %s/%s (%s); "
-                    "falling back to contributors.",
-                    owner, repo, exc.message,
-                )
-                collaborators = []
-            try:
-                pending = self.get_pending_invitations(owner, repo)
-            except GitHubError as exc:
-                logger.warning(
-                    "Could not list pending invitations for %s/%s (%s).",
-                    owner, repo, exc.message,
-                )
-                pending = []
-            combined = collaborators + pending
-            seen: set[str] = set()
-            unique: list[dict] = []
-            for item in combined:
-                username = item.get("username") or item.get("login") or "unknown"
-                if username in seen:
-                    continue
-                seen.add(username)
-                unique.append(item)
-            owner_obj = repo_meta.get("owner", {})
-            owner_login = owner_obj.get("login") if isinstance(owner_obj, dict) else owner_obj
-            if owner_login and owner_login not in seen:
-                unique.append(
-                    {
-                        "username": owner_login,
-                        "avatar": "",
-                        "url": f"https://github.com/{owner_login}",
-                        "role": "admin",
-                        "permissions": {"admin": True, "push": True, "pull": True},
-                        "pending": False,
-                    }
-                )
-            if unique:
-                source = unique
-                source_kind = "collaborator"
-        if not source:
-            try:
-                source = self.get_contributors(owner, repo)
-                source_kind = "contributor"
-            except GitHubError:
-                source = []
-        for item in source:
-            members.append(
-                {
-                    "username": item.get("username") or item.get("login") or "unknown",
-                    "avatar": item.get("avatar_url") or item.get("avatar") or "",
-                    "url": item.get("html_url") or item.get("url") or "",
-                    "role": item.get("role") or item.get("role_name") or source_kind,
-                    "permissions": item.get("permissions") or {},
-                    "pending": bool(item.get("pending", False)),
-=======
         team_name = settings.GITHUB_TEAM or ""
         members: list[dict[str, Any]] = []
         seen: set[str] = set()
@@ -968,6 +879,8 @@ class GitHubAPI:
             url: str,
             role: str,
             permission: str,
+            permissions: Optional[dict[str, bool]] = None,
+            pending: bool = False,
         ) -> None:
             if not login or login in seen:
                 return
@@ -979,8 +892,9 @@ class GitHubAPI:
                     "url": url,
                     "role": role,
                     "permission": permission,
+                    "permissions": permissions or {},
                     "is_owner": login == owner_login,
->>>>>>> f14184d (Update GitPulse team activity dashboard)
+                    "pending": pending,
                     "commits": 0,
                     "commits_all_time": contributor_counts.get(login, 0),
                     "pr_count": 0,
@@ -1004,8 +918,8 @@ class GitHubAPI:
                 perms = item.get("permissions") or {}
                 permission = (
                     "admin" if perms.get("admin")
+                    else "maintain" if perms.get("maintain")
                     else "write" if perms.get("push")
-                    else "read" if perms.get("pull")
                     else "read"
                 )
                 _add_member(
@@ -1014,6 +928,37 @@ class GitHubAPI:
                     item.get("html_url", ""),
                     "owner" if login == owner_login else "collaborator",
                     "admin" if login == owner_login else permission,
+                    permissions=perms,
+                )
+
+            # Pending invitations: people granted access who have not yet
+            # accepted. They are normalized to the same member shape.
+            try:
+                pending_invites = self.get_pending_invitations(owner, repo)
+            except GitHubError as exc:
+                logger.warning(
+                    "Could not list pending invitations for %s/%s (%s).",
+                    owner, repo, exc.message,
+                )
+                pending_invites = []
+            for item in pending_invites:
+                username = item.get("username") or item.get("login") or ""
+                if not username:
+                    continue
+                perms = item.get("permissions") or {}
+                _add_member(
+                    username,
+                    item.get("avatar") or item.get("avatar_url") or "",
+                    item.get("url") or item.get("html_url") or "",
+                    item.get("role") or "pending read",
+                    (
+                        "admin" if perms.get("admin")
+                        else "maintain" if perms.get("maintain")
+                        else "write" if perms.get("push")
+                        else "read"
+                    ),
+                    permissions=perms,
+                    pending=True,
                 )
         else:
             # Fallback when the collaborators endpoint is not accessible.
@@ -1026,13 +971,16 @@ class GitHubAPI:
                     item.get("avatar_url", ""),
                     item.get("html_url", ""),
                     "owner" if login == owner_login else "contributor",
-                    "admin" if login == owner_login else "",
+                    "admin" if login == owner_login else "read",
                 )
 
         # The owner must always be a member - even if the collaborators
         # endpoint omits them, they are shown (but never as the ONLY member).
         if owner_login and owner_login not in seen:
-            _add_member(owner_login, owner_avatar, owner_url, "owner", "admin")
+            _add_member(
+                owner_login, owner_avatar, owner_url, "owner", "admin",
+                permissions={"admin": True, "push": True, "pull": True},
+            )
 
         # Optional org team members are merged in (union), never replacing
         # the collaborators - this preserves the GITHUB_TEAM feature.
@@ -1051,7 +999,7 @@ class GitHubAPI:
                     item.get("avatar_url", ""),
                     item.get("html_url", ""),
                     "owner" if login == owner_login else "team member",
-                    "admin" if login == owner_login else "",
+                    "admin" if login == owner_login else "read",
                 )
 
         logger.info("Team members resolved: %d", len(members))
@@ -1173,11 +1121,6 @@ class GitHubAPI:
         for login, parsed in last_commit.items():
             self._track_latest(latest_by_member, login, parsed.isoformat())
 
-<<<<<<< HEAD
-        # --- Languages + repo metadata ---
-        # `repo_meta` was already fetched up front (it is needed to identify
-        # the repository owner when building the member list).
-=======
         # --- Unified activity feed (commits + PRs + issues) ---
         activity_feed: list[dict[str, Any]] = []
         for c in recent_commits:
@@ -1231,7 +1174,6 @@ class GitHubAPI:
         activity_feed = activity_feed[:50]
 
         # --- Languages ---
->>>>>>> f14184d (Update GitPulse team activity dashboard)
         try:
             languages = self.get_repository_languages(owner, repo)
         except GitHubError:

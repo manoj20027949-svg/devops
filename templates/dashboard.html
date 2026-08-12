@@ -196,15 +196,10 @@
                                         </div>
                                     </div>
                                 </td>
-<<<<<<< HEAD
-                                <td class="text-center">
-                                    <span class="badge badge-glass" {% if m.permissions %}title="permissions — admin: {{ m.permissions.admin|default(False) }}, write: {{ m.permissions.push|default(False) }}, read: {{ m.permissions.pull|default(False) }}"{% endif %}>{{ m.role|default('collaborator') }}</span>
-                                    {% if m.pending %}<span class="badge badge-pending" title="This user has been invited to the repository but has not accepted yet.">Pending</span>{% endif %}
-=======
                                 <td class="text-center"><span class="badge badge-glass">{{ m.role|default('collaborator') }}</span></td>
                                 <td class="text-center">
                                     <span class="badge badge-type badge-perm-{{ (m.permission|default('read'))|lower }}">{{ m.permission|default('read')|title }}</span>
->>>>>>> f14184d (Update GitPulse team activity dashboard)
+                                </td>
                                 </td>
                                 <td class="text-center">{{ m.commits }}</td>
                                 <td class="text-center">{{ m.commits_all_time|default(m.commits) }}</td>
@@ -224,11 +219,7 @@
                                 </td>
                             </tr>
                             {% else %}
-<<<<<<< HEAD
-                            <tr><td colspan="9" class="muted text-center py-4">No collaborators found.</td></tr>
-=======
                             <tr><td colspan="11" class="muted text-center py-4">No members found.</td></tr>
->>>>>>> f14184d (Update GitPulse team activity dashboard)
                             {% endfor %}
                         </tbody>
                     </table>

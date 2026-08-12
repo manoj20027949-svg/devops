@@ -200,9 +200,44 @@ class TestBuildTeamReport:
         assert report["members"][0]["last_active_days"] >= 0
 
 
-<<<<<<< HEAD
-class TestCollaborators:
-    def test_get_collaborators_paginates_and_normalizes(self, monkeypatch):
+class TestCollaboratorHelpers:
+    """Tests for the raw/normalized collaborator and invitation fetchers."""
+
+    def test_get_collaborators_returns_raw_paginated_items(self, monkeypatch):
+        api = GitHubAPI("t")
+        requested_pages = []
+
+        def fake_request(method, path, params=None, retries=3):
+            assert path == "/repos/o/r/collaborators"
+            page = (params or {}).get("page", 1)
+            requested_pages.append(page)
+            if page == 1:
+                return [{"login": f"user{i}"} for i in range(10)]
+            return [{"login": "bob"}]
+
+        monkeypatch.setattr(api, "_request", fake_request)
+
+        collabs = api.get_collaborators("o", "r", per_page=10)
+
+        assert len(collabs) == 11
+        assert requested_pages == [1, 2]
+        assert collabs[0]["login"] == "user0"
+        assert collabs[10]["login"] == "bob"
+
+    def test_get_collaborators_forwards_affiliation_filter(self, monkeypatch):
+        api = GitHubAPI("t")
+        seen = {}
+
+        def fake_request(method, path, params=None, retries=3):
+            seen.update(params or {})
+            return []
+
+        monkeypatch.setattr(api, "_request", fake_request)
+
+        api.get_collaborators("o", "r", affiliation="outside")
+        assert seen.get("affiliation") == "outside"
+
+    def test_get_repository_collaborators_paginates_and_normalizes(self, monkeypatch):
         api = GitHubAPI("t")
         requested_pages = []
 
@@ -233,7 +268,7 @@ class TestCollaborators:
 
         monkeypatch.setattr(api, "_request", fake_request)
 
-        collabs = api.get_collaborators("o", "r", per_page=10)
+        collabs = api.get_repository_collaborators("o", "r", per_page=10)
 
         assert len(collabs) == 11
         assert requested_pages == [1, 2]
@@ -245,7 +280,7 @@ class TestCollaborators:
         assert collabs[10]["username"] == "bob"
         assert collabs[10]["role"] == "read"
 
-    def test_get_collaborators_derives_role_from_permissions(self, monkeypatch):
+    def test_get_repository_collaborators_derives_role_from_permissions(self, monkeypatch):
         api = GitHubAPI("t")
 
         def fake_request(method, path, params=None, retries=3):
@@ -261,7 +296,7 @@ class TestCollaborators:
 
         monkeypatch.setattr(api, "_request", fake_request)
 
-        collabs = api.get_collaborators("o", "r")
+        collabs = api.get_repository_collaborators("o", "r")
         assert collabs[0]["role"] == "write"
 
     def test_get_pending_invitations_normalizes(self, monkeypatch):
@@ -353,12 +388,11 @@ class TestCollaborators:
         usernames = {m["username"] for m in report["members"]}
         assert usernames == {"alice", "bob"}
         bob = next(m for m in report["members"] if m["username"] == "bob")
-        assert bob["role"] == "read"
+        assert bob["role"] == "collaborator"
+        assert bob["permission"] == "read"
         assert bob["permissions"]["pull"] is True
         assert report["overview"]["members"] == 2
 
-    def test_build_team_report_falls_back_to_contributors_when_collaborators_denied(self, monkeypatch):
-=======
 class TestCollaboratorMembers:
     """The team must come from /collaborators, not just /contributors."""
 
@@ -473,29 +507,30 @@ class TestCollaboratorMembers:
         assert owner["permission"] == "admin"
 
     def test_collaborators_endpoint_failure_falls_back_to_contributors(self, monkeypatch):
->>>>>>> f14184d (Update GitPulse team activity dashboard)
         api = GitHubAPI("t")
 
         def fake_request(method, path, params=None, retries=3):
             if "collaborators" in path:
                 raise GitHubError("403 Forbidden", status_code=403)
             if "contributors" in path:
-<<<<<<< HEAD
-                return [{"login": "alice"}]
-            if "commits" in path:
-                return []
-            if "pulls" in path or "issues" in path:
+                return [{"login": "alice", "contributions": 7}]
+            if "commits" in path or "pulls" in path or "issues" in path:
                 return []
             if "languages" in path:
                 return {}
-            return {"full_name": "o/r", "description": "", "stargazers_count": 0, "forks_count": 0, "open_issues_count": 0, "default_branch": "main"}
+            return _repo_payload()
 
         monkeypatch.setattr(api, "_request", fake_request)
-
         report = api.build_team_report("o", "r")
 
-        assert report["members"][0]["username"] == "alice"
-        assert report["members"][0]["role"] == "contributor"
+        usernames = [m["username"] for m in report["members"]]
+        # Contributors are used, and the owner is always guaranteed a seat.
+        assert "alice" in usernames
+        assert "o" in usernames
+        assert report["overview"]["members"] == 2
+        alice = next(m for m in report["members"] if m["username"] == "alice")
+        assert alice["role"] == "contributor"
+        assert alice["commits_all_time"] == 7
 
     def test_build_team_report_merges_pending_invitations_and_owner(self, monkeypatch):
         """Pending invitees and the repo owner must appear as members even if
@@ -544,30 +579,13 @@ class TestCollaboratorMembers:
         assert charlie["role"] == "pending read"
         assert charlie["permissions"]["pull"] is True
         owner = next(m for m in report["members"] if m["username"] == "owneruser")
-        assert owner["role"] == "admin"
+        assert owner["role"] == "owner"
+        assert owner["permission"] == "admin"
         assert owner["permissions"]["admin"] is True
         assert owner["pending"] is False
         assert owner["commits"] == 1
         assert report["overview"]["members"] == 3
         assert usernames.count("owneruser") == 1
-=======
-                return [{"login": "alice", "contributions": 7}]
-            if "commits" in path or "pulls" in path or "issues" in path:
-                return []
-            if "languages" in path:
-                return {}
-            return _repo_payload()
-
-        monkeypatch.setattr(api, "_request", fake_request)
-        report = api.build_team_report("o", "r")
-
-        usernames = [m["username"] for m in report["members"]]
-        # Contributors are used, and the owner is always guaranteed a seat.
-        assert "alice" in usernames
-        assert "o" in usernames
-        assert report["overview"]["members"] == 2
-        alice = next(m for m in report["members"] if m["username"] == "alice")
-        assert alice["commits_all_time"] == 7
 
     def test_activity_feed_contains_real_events_from_all_members(self, monkeypatch):
         api = GitHubAPI("t")
@@ -627,7 +645,6 @@ class TestCollaboratorMembers:
         assert by_name["wilfrit0212005-glitch"]["last_active_text"] == "No activity"
         assert report["overview"]["active_members"] == 1
         assert report["overview"]["inactive_members"] == 3
->>>>>>> f14184d (Update GitPulse team activity dashboard)
 
 
 class TestTokenValidation:
