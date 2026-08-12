@@ -199,6 +199,7 @@ class TestCollaborators:
         assert collabs[0]["avatar"] == "https://x/alice.png"
         assert collabs[0]["role"] == "admin"
         assert collabs[0]["permissions"]["push"] is True
+        assert collabs[0]["pending"] is False
         assert collabs[10]["username"] == "bob"
         assert collabs[10]["role"] == "read"
 
@@ -220,6 +221,68 @@ class TestCollaborators:
 
         collabs = api.get_collaborators("o", "r")
         assert collabs[0]["role"] == "write"
+
+    def test_get_pending_invitations_normalizes(self, monkeypatch):
+        api = GitHubAPI("t")
+
+        def fake_request(method, path, params=None, retries=3):
+            assert path == "/repos/o/r/invitations"
+            return [
+                {
+                    "invitee": {
+                        "login": "charlie",
+                        "avatar_url": "https://x/charlie.png",
+                        "html_url": "https://github.com/charlie",
+                    },
+                    "permissions": "write",
+                },
+                {
+                    "invitee": {
+                        "login": "dave",
+                        "avatar_url": "",
+                        "html_url": "",
+                    },
+                    "permissions": "read",
+                },
+            ]
+
+        monkeypatch.setattr(api, "_request", fake_request)
+
+        invites = api.get_pending_invitations("o", "r")
+
+        assert len(invites) == 2
+        charlie = invites[0]
+        assert charlie["username"] == "charlie"
+        assert charlie["avatar"] == "https://x/charlie.png"
+        assert charlie["url"] == "https://github.com/charlie"
+        assert charlie["role"] == "pending write"
+        assert charlie["permissions"]["push"] is True
+        assert charlie["pending"] is True
+        assert invites[1]["role"] == "pending read"
+        assert invites[1]["permissions"]["pull"] is True
+
+    def test_get_pending_invitations_propagates_denied(self, monkeypatch):
+        api = GitHubAPI("t")
+
+        def boom(method, path, params=None, retries=3):
+            raise GitHubError("403 Forbidden", status_code=403)
+
+        monkeypatch.setattr(api, "_request", boom)
+
+        with pytest.raises(GitHubError) as exc:
+            api.get_pending_invitations("o", "r")
+
+        assert exc.value.status_code == 403
+
+    def test_permissions_from_role_maps_all_roles(self):
+        assert GitHubAPI._permissions_from_role("admin") == {
+            "admin": True, "maintain": False, "push": True, "triage": False, "pull": True,
+        }
+        assert GitHubAPI._permissions_from_role("maintain")["maintain"] is True
+        assert GitHubAPI._permissions_from_role("write")["push"] is True
+        assert GitHubAPI._permissions_from_role("triage")["triage"] is True
+        assert GitHubAPI._permissions_from_role("read")["pull"] is True
+        assert GitHubAPI._permissions_from_role("")["pull"] is True
 
     def test_build_team_report_includes_collaborator_without_commits(self, monkeypatch):
         """A collaborator who never committed must still appear as a member."""
@@ -274,6 +337,60 @@ class TestCollaborators:
 
         assert report["members"][0]["username"] == "alice"
         assert report["members"][0]["role"] == "contributor"
+
+    def test_build_team_report_merges_pending_invitations_and_owner(self, monkeypatch):
+        """Pending invitees and the repo owner must appear as members even if
+        the collaborators endpoint only returns accepted collaborators."""
+        api = GitHubAPI("t")
+
+        def fake_request(method, path, params=None, retries=3):
+            if "invitations" in path:
+                return [
+                    {
+                        "invitee": {"login": "charlie", "avatar_url": "", "html_url": ""},
+                        "permissions": "read",
+                    }
+                ]
+            if "collaborators" in path:
+                return [
+                    {"login": "alice", "role_name": "write",
+                     "permissions": {"admin": False, "maintain": False, "push": True, "triage": False, "pull": True}},
+                ]
+            if "contributors" in path:
+                return [{"login": "alice"}]
+            if "commits" in path:
+                return [{"author": {"login": "owneruser"}, "commit": {"author": {"date": "2024-01-01T00:00:00Z"}}}]
+            if "pulls" in path or "issues" in path:
+                return []
+            if "languages" in path:
+                return {}
+            return {
+                "full_name": "o/r",
+                "description": "",
+                "stargazers_count": 0,
+                "forks_count": 0,
+                "open_issues_count": 0,
+                "default_branch": "main",
+                "owner": {"login": "owneruser"},
+            }
+
+        monkeypatch.setattr(api, "_request", fake_request)
+
+        report = api.build_team_report("o", "r")
+
+        usernames = [m["username"] for m in report["members"]]
+        assert set(usernames) == {"alice", "charlie", "owneruser"}
+        charlie = next(m for m in report["members"] if m["username"] == "charlie")
+        assert charlie["pending"] is True
+        assert charlie["role"] == "pending read"
+        assert charlie["permissions"]["pull"] is True
+        owner = next(m for m in report["members"] if m["username"] == "owneruser")
+        assert owner["role"] == "admin"
+        assert owner["permissions"]["admin"] is True
+        assert owner["pending"] is False
+        assert owner["commits"] == 1
+        assert report["overview"]["members"] == 3
+        assert usernames.count("owneruser") == 1
 
 
 class TestTokenValidation:

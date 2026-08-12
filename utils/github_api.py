@@ -299,7 +299,7 @@ class GitHubAPI:
             out.extend(page)
         return out
 
-    def get_collaborators(self, owner: str, repo: str, per_page: int = 100) -> list[dict]:
+    def get_repository_collaborators(self, owner: str, repo: str, per_page: int = 100) -> list[dict]:
         """
         Return the repository's actual collaborators via
         GET /repos/{owner}/{repo}/collaborators (paginated).
@@ -311,12 +311,25 @@ class GitHubAPI:
 
         Requires the authenticated token to have push access to the repo;
         callers should fall back to `get_contributors` on GitHubError.
+
+        The GitHub API response status and the number of collaborators found
+        are logged for debugging. The token itself is never logged.
         """
+        path = f"/repos/{owner}/{repo}/collaborators"
         out: list[dict] = []
-        for page in self._iter_pages(
-            f"/repos/{owner}/{repo}/collaborators", per_page=per_page
-        ):
-            out.extend(page)
+        try:
+            for page in self._iter_pages(path, per_page=per_page):
+                out.extend(page)
+            logger.info(
+                "Collaborators fetch for %s/%s returned HTTP 200 with %d collaborator(s)",
+                owner, repo, len(out),
+            )
+        except GitHubError as exc:
+            logger.warning(
+                "Collaborators fetch for %s/%s failed (status=%s): %s",
+                owner, repo, exc.status_code or "n/a", exc.message,
+            )
+            raise
         return [
             {
                 "username": item.get("login", "unknown"),
@@ -324,9 +337,78 @@ class GitHubAPI:
                 "url": item.get("html_url", ""),
                 "role": self._collaborator_role(item),
                 "permissions": self._collaborator_permissions(item),
+                "pending": False,
             }
             for item in out
         ]
+
+    def get_collaborators(self, owner: str, repo: str, per_page: int = 100) -> list[dict]:
+        """Alias for `get_repository_collaborators` (kept for compatibility)."""
+        return self.get_repository_collaborators(owner, repo, per_page)
+
+    def get_pending_invitations(self, owner: str, repo: str, per_page: int = 100) -> list[dict]:
+        """
+        Return pending repository invitations via
+        GET /repos/{owner}/{repo}/invitations (paginated).
+
+        Collaborators that were added but have not yet accepted the
+        invitation do not appear in /collaborators; they show up here until
+        they accept. Merging these into the member list makes newly added
+        members visible immediately. Requires the same push/admin access as
+        the collaborators endpoint.
+
+        The GitHub API response status and the number of pending invitations
+        found are logged for debugging. The token itself is never logged.
+        """
+        path = f"/repos/{owner}/{repo}/invitations"
+        out: list[dict] = []
+        try:
+            for page in self._iter_pages(path, per_page=per_page):
+                out.extend(page)
+            logger.info(
+                "Invitations fetch for %s/%s returned HTTP 200 with %d pending invitation(s)",
+                owner, repo, len(out),
+            )
+        except GitHubError as exc:
+            logger.warning(
+                "Invitations fetch for %s/%s failed (status=%s): %s",
+                owner, repo, exc.status_code or "n/a", exc.message,
+            )
+            raise
+        return [
+            {
+                "username": item.get("invitee", {}).get("login", "unknown"),
+                "avatar": item.get("invitee", {}).get("avatar_url", ""),
+                "url": item.get("invitee", {}).get("html_url", ""),
+                "role": f"pending {item.get('permissions', 'read')}",
+                "permissions": self._permissions_from_role(item.get("permissions", "read")),
+                "pending": True,
+            }
+            for item in out
+        ]
+
+    @staticmethod
+    def _permissions_from_role(role: str) -> dict[str, bool]:
+        """Map a GitHub role string (admin/write/read/...) to permission flags."""
+        flags: dict[str, bool] = {
+            "admin": False,
+            "maintain": False,
+            "push": False,
+            "triage": False,
+            "pull": False,
+        }
+        role = (role or "").lower()
+        if role == "admin":
+            flags.update(admin=True, push=True, pull=True)
+        elif role == "maintain":
+            flags.update(maintain=True, push=True, pull=True)
+        elif role in ("write", "push"):
+            flags.update(push=True, pull=True)
+        elif role == "triage":
+            flags.update(triage=True, pull=True)
+        else:  # read / pull
+            flags["pull"] = True
+        return flags
 
     @staticmethod
     def _collaborator_permissions(item: dict) -> dict[str, bool]:
@@ -705,10 +787,22 @@ class GitHubAPI:
         # --- Team source: org team if configured, else repo collaborators ---
         # GitHub's /collaborators endpoint returns the actual members of the
         # repository (not just people who have committed), so the dashboard
-        # shows everyone granted access. When the token cannot list
-        # collaborators we fall back to /contributors.
+        # shows everyone granted access. Invitations that have not been
+        # accepted yet are merged in too, otherwise newly added members stay
+        # invisible until they accept, and the repository owner is always
+        # included. Contributors are used only when the token cannot list
+        # collaborators at all.
         members: list[dict[str, Any]] = []
         team_name = settings.GITHUB_TEAM or ""
+
+        # Repo metadata is needed both to identify the owner (so the owner is
+        # always listed as a member) and for the final report, so fetch it
+        # once up front.
+        try:
+            repo_meta = self.get_repository(owner, repo)
+        except GitHubError:
+            repo_meta = {}
+
         source = []
         source_kind = "contributor"
         if team_name:
@@ -723,15 +817,47 @@ class GitHubAPI:
                 source = []
         if not source:
             try:
-                source = self.get_collaborators(owner, repo)
-                source_kind = "collaborator"
+                collaborators = self.get_repository_collaborators(owner, repo)
             except GitHubError as exc:
                 logger.warning(
                     "Could not list collaborators for %s/%s (%s); "
                     "falling back to contributors.",
                     owner, repo, exc.message,
                 )
-                source = []
+                collaborators = []
+            try:
+                pending = self.get_pending_invitations(owner, repo)
+            except GitHubError as exc:
+                logger.warning(
+                    "Could not list pending invitations for %s/%s (%s).",
+                    owner, repo, exc.message,
+                )
+                pending = []
+            combined = collaborators + pending
+            seen: set[str] = set()
+            unique: list[dict] = []
+            for item in combined:
+                username = item.get("username") or item.get("login") or "unknown"
+                if username in seen:
+                    continue
+                seen.add(username)
+                unique.append(item)
+            owner_obj = repo_meta.get("owner", {})
+            owner_login = owner_obj.get("login") if isinstance(owner_obj, dict) else owner_obj
+            if owner_login and owner_login not in seen:
+                unique.append(
+                    {
+                        "username": owner_login,
+                        "avatar": "",
+                        "url": f"https://github.com/{owner_login}",
+                        "role": "admin",
+                        "permissions": {"admin": True, "push": True, "pull": True},
+                        "pending": False,
+                    }
+                )
+            if unique:
+                source = unique
+                source_kind = "collaborator"
         if not source:
             try:
                 source = self.get_contributors(owner, repo)
@@ -741,11 +867,12 @@ class GitHubAPI:
         for item in source:
             members.append(
                 {
-                    "username": item.get("login") or item.get("username") or "unknown",
+                    "username": item.get("username") or item.get("login") or "unknown",
                     "avatar": item.get("avatar_url") or item.get("avatar") or "",
                     "url": item.get("html_url") or item.get("url") or "",
                     "role": item.get("role") or item.get("role_name") or source_kind,
                     "permissions": item.get("permissions") or {},
+                    "pending": bool(item.get("pending", False)),
                     "commits": 0,
                     "pr_count": 0,
                     "prs_created": 0,
@@ -873,14 +1000,12 @@ class GitHubAPI:
             self._track_latest(latest_by_member, login, parsed.isoformat())
 
         # --- Languages + repo metadata ---
+        # `repo_meta` was already fetched up front (it is needed to identify
+        # the repository owner when building the member list).
         try:
             languages = self.get_repository_languages(owner, repo)
         except GitHubError:
             languages = {}
-        try:
-            repo_meta = self.get_repository(owner, repo)
-        except GitHubError:
-            repo_meta = {}
 
         # --- Finalize members: last activity + score ---
         now = datetime.now(timezone.utc)

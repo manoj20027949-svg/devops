@@ -287,6 +287,17 @@ html, body {
     padding: 6px 12px;
     border-radius: 999px;
 }
+.badge-pending {
+    background: rgba(243, 156, 18, 0.15);
+    color: var(--orange);
+    border: 1px solid rgba(243, 156, 18, 0.5);
+    font-size: 0.68rem;
+    font-weight: 700;
+    padding: 3px 8px;
+    margin-left: 6px;
+    border-radius: 999px;
+    vertical-align: middle;
+}
 .badge-prio { background: var(--glass-bg); border: 1px solid var(--glass-border); }
 .prio-high .badge-prio { color: var(--red); border-color: rgba(255, 82, 82, 0.5); }
 .prio-medium .badge-prio { color: var(--orange); border-color: rgba(243, 156, 18, 0.5); }
