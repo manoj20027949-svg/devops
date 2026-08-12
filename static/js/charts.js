@@ -148,17 +148,16 @@
         }
     }
 
-    // ---------- Member status doughnut ----------
+    // ---------- Member status doughnut (Active / Inactive) ----------
     const statusCanvas = document.getElementById("statusChart");
     if (statusCanvas) {
         const active = parseInt(statusCanvas.dataset.active || "0", 10);
-        const recent = parseInt(statusCanvas.dataset.recent || "0", 10);
         const inactive = parseInt(statusCanvas.dataset.inactive || "0", 10);
-        const labels = ["Active", "Recently Active", "Inactive"];
-        const values = [active, recent, inactive];
+        const labels = ["Active", "Inactive"];
+        const values = [active, inactive];
         const empty = document.getElementById("statusEmpty");
 
-        if (active + recent + inactive === 0) {
+        if (active + inactive === 0) {
             if (empty) empty.classList.add("show");
         } else {
             new Chart(statusCanvas, {
@@ -167,7 +166,7 @@
                     labels: labels,
                     datasets: [{
                         data: values,
-                        backgroundColor: ["#2ecc71", "#f1c40f", "#ff5252"],
+                        backgroundColor: ["#2ecc71", "#ff5252"],
                         borderWidth: 0,
                         hoverOffset: 8,
                     }],

@@ -131,6 +131,23 @@ def test_scan_route_runs_and_caches(app, client, monkeypatch):
     assert app.extensions["scan_cache"]["data"] == []
 
 
+def test_refresh_route_clears_caches_and_redirects(app, client, monkeypatch):
+    """Refresh busts the repo list + scan caches so GitHub data re-fetches."""
+    _patch_repo_list(monkeypatch)
+    app.extensions["scan_cache"] = {"data": [{"rule": "stale"}]}
+    app.extensions["repo_cache"]["alice"] = {"ts": 0, "repos": [{"owner": "old", "repo": "r"}]}
+    with client.session_transaction() as sess:
+        sess["github_token"] = "t"
+        sess["github_user"] = "alice"
+
+    response = client.post("/dashboard/refresh")
+
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/dashboard")
+    assert app.extensions["scan_cache"]["data"] is None
+    assert "alice" not in app.extensions["repo_cache"]
+
+
 def test_unauthorized_page_has_no_app_shell(client, monkeypatch):
     from config.settings import settings
 

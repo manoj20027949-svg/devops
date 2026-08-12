@@ -330,6 +330,54 @@ def register_routes(app: Flask) -> None:
             ai_fixed_count=ai_fixed_count,
         )
 
+<<<<<<< HEAD
+=======
+    # --- Dashboard refresh (re-fetch collaborators + activity) ------------
+    @app.route("/dashboard/refresh", methods=["POST"])
+    @login_required
+    def refresh_dashboard():
+        """Force a fresh fetch of collaborators, commits, PRs and issues."""
+        # The report itself is rebuilt from the GitHub API on every dashboard
+        # load; refreshing only needs to clear the cached repository list and
+        # the cached scan findings, then reload the page.
+        app.extensions["repo_cache"].pop(_repo_cache_key(), None)
+        app.extensions["scan_cache"] = {"data": None}
+        from config.logging_setup import get_logger
+
+        get_logger("app").info(
+            "Dashboard refresh requested by %s", session.get("github_user")
+        )
+        flash("Dashboard refreshed - GitHub data re-fetched.", "success")
+        return redirect(url_for("dashboard"))
+
+    # --- Repository selector ----------------------------------------------
+    @app.route("/dashboard/select-repo", methods=["POST"])
+    @login_required
+    def select_repo():
+        value = (request.form.get("repo") or "").strip()
+        if not value or "/" not in value:
+            flash("Invalid repository selection.", "warning")
+            return redirect(url_for("dashboard"))
+
+        owner, repo = value.split("/", 1)
+        owner = owner.strip()
+        repo = repo.strip()
+        if not owner or not repo:
+            flash("Invalid repository selection.", "warning")
+            return redirect(url_for("dashboard"))
+
+        repos, _ = _list_accessible_repos(app)
+        if not any(_repo_matches(r, owner, repo) for r in repos):
+            flash(f"You don't have access to this repository ({owner}/{repo}).", "danger")
+            return redirect(url_for("dashboard"))
+
+        _set_session_repo(owner, repo)
+        # Scan findings are cached globally; they must not leak between repos.
+        app.extensions["scan_cache"] = {"data": None}
+        flash(f"Now viewing {owner}/{repo}.", "success")
+        return redirect(url_for("dashboard"))
+
+>>>>>>> f14184d (Update GitPulse team activity dashboard)
     # --- Member profile --------------------------------------------------
     @app.route("/member/<username>")
     @login_required

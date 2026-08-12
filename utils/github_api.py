@@ -299,6 +299,7 @@ class GitHubAPI:
             out.extend(page)
         return out
 
+<<<<<<< HEAD
     def get_repository_collaborators(self, owner: str, repo: str, per_page: int = 100) -> list[dict]:
         """
         Return the repository's actual collaborators via
@@ -438,6 +439,35 @@ class GitHubAPI:
         if perms.get("triage"):
             return "triage"
         return "read"
+=======
+    def get_collaborators(
+        self,
+        owner: str,
+        repo: str,
+        per_page: int = 100,
+        affiliation: Optional[str] = None,
+    ) -> list[dict]:
+        """
+        Return every person with access to the repository (paginated).
+
+        GET /repos/{owner}/{repo}/collaborators
+        ``affiliation`` filters by ``outside``, ``direct`` or ``all`` (default).
+        Each item includes the user's ``permissions`` (admin / push / pull).
+
+        Unlike /contributors (which only lists people with commits) this
+        endpoint returns the real collaborators, including people who have
+        been granted access but have not pushed anything yet.
+        """
+        params: dict[str, Any] = {}
+        if affiliation:
+            params["affiliation"] = affiliation
+        out: list[dict] = []
+        for page in self._iter_pages(
+            f"/repos/{owner}/{repo}/collaborators", params=params, per_page=per_page
+        ):
+            out.extend(page)
+        return out
+>>>>>>> f14184d (Update GitPulse team activity dashboard)
 
     def get_org_members(self, org: str, per_page: int = 100) -> list[dict]:
         """Return members of an organization (requires membership scope)."""
@@ -720,14 +750,24 @@ class GitHubAPI:
         return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat() + "Z"
 
     def _collect_commits(self, owner: str, repo: str, since: str):
-        """Return (counts, latest_dates, recent_list) for commits since `since`."""
+        """
+        Return (counts, latest_dates, recent_list, total) for commits since `since`.
+
+        ``counts`` maps a GitHub login to the number of commits authored by
+        that account (matched via ``commit.author.login``). Commits whose
+        author is unknown (``author`` is null, or the commit was authored with
+        an email GitHub cannot map to a user) are not attributed to anyone and
+        never crash the aggregation; they are still counted in ``total``.
+        """
         counts: dict[str, int] = {}
         latest: dict[str, datetime] = {}
         recent: list[dict] = []
+        total = 0
         for page in self._iter_pages(
             f"/repos/{owner}/{repo}/commits", params={"since": since}, per_page=100
         ):
             for commit in page:
+                total += 1
                 author = commit.get("author") or {}
                 login = author.get("login")
                 date = (commit.get("commit") or {}).get("author", {}).get("date")
@@ -752,7 +792,7 @@ class GitHubAPI:
                             "html_url": commit.get("html_url", ""),
                         }
                     )
-        return counts, latest, recent
+        return counts, latest, recent, total
 
     def _iter_commits_90d(self, owner: str, repo: str) -> Iterator[dict]:
         """Yield every commit from the last 90 days (paginated)."""
@@ -769,9 +809,14 @@ class GitHubAPI:
         """
         Aggregate everything needed by the dashboard into one structure.
 
+        Team members come from the real repository collaborators
+        (GET /repos/{owner}/{repo}/collaborators), with the repository owner
+        guaranteed to be present and GITHUB_TEAM members merged in as well.
+
         Returns a dict with:
             overview:   {members, active/inactive counts, commits, PRs, issues}
             members:    per-user metrics including the weighted activity score.
+            activity_feed: recent commits + PRs + issues from ALL collaborators.
             pushes:     most recent commits with file-level detail.
             pull_requests: recent PRs with review status.
             issues:     recent issues.
@@ -782,8 +827,47 @@ class GitHubAPI:
 
         days = days or settings.ACTIVITY_WINDOW_DAYS
         since = self._since_iso(days)
-        logger.info("Building team report for %s/%s (%dd window)", owner, repo, days)
+        logger.info("GitHub repository: %s/%s (%dd activity window)", owner, repo, days)
 
+        # --- Repo metadata (owner identity is used below) ---
+        try:
+            repo_meta = self.get_repository(owner, repo)
+        except GitHubError:
+            repo_meta = {}
+        repo_owner = repo_meta.get("owner") or {}
+        owner_login = repo_owner.get("login", "")
+        owner_avatar = repo_owner.get("avatar_url", "")
+        owner_url = repo_owner.get("html_url", f"https://github.com/{owner_login}")
+
+        # ------------------------------------------------------------------
+        # Team source - REAL repository collaborators (not just contributors)
+        # ------------------------------------------------------------------
+        # The old code only used /contributors, which lists people who have
+        # committed. Collaborators who have been granted access but not pushed
+        # anything yet never appeared - that is why "Total Members" showed 1.
+        collaborators: list[dict[str, Any]] = []
+        try:
+            collaborators = self.get_collaborators(owner, repo)
+            logger.info("Collaborators fetched: %d", len(collaborators))
+        except GitHubError as exc:
+            logger.warning(
+                "Collaborators endpoint unavailable (%s); falling back to contributors.",
+                exc.message,
+            )
+
+        # Contributors also give us an all-time commit count per user.
+        contributors: list[dict[str, Any]] = []
+        try:
+            contributors = self.get_contributors(owner, repo)
+        except GitHubError:
+            contributors = []
+        contributor_counts: dict[str, int] = {
+            (c.get("login") or ""): int(c.get("contributions") or 0)
+            for c in contributors
+            if c.get("login")
+        }
+
+<<<<<<< HEAD
         # --- Team source: org team if configured, else repo collaborators ---
         # GitHub's /collaborators endpoint returns the actual members of the
         # repository (not just people who have committed), so the dashboard
@@ -873,7 +957,32 @@ class GitHubAPI:
                     "role": item.get("role") or item.get("role_name") or source_kind,
                     "permissions": item.get("permissions") or {},
                     "pending": bool(item.get("pending", False)),
+=======
+        team_name = settings.GITHUB_TEAM or ""
+        members: list[dict[str, Any]] = []
+        seen: set[str] = set()
+
+        def _add_member(
+            login: str,
+            avatar: str,
+            url: str,
+            role: str,
+            permission: str,
+        ) -> None:
+            if not login or login in seen:
+                return
+            seen.add(login)
+            members.append(
+                {
+                    "username": login,
+                    "avatar": avatar,
+                    "url": url,
+                    "role": role,
+                    "permission": permission,
+                    "is_owner": login == owner_login,
+>>>>>>> f14184d (Update GitPulse team activity dashboard)
                     "commits": 0,
+                    "commits_all_time": contributor_counts.get(login, 0),
                     "pr_count": 0,
                     "prs_created": 0,
                     "prs_open": 0,
@@ -887,8 +996,71 @@ class GitHubAPI:
                 }
             )
 
-        # --- Commits ---
-        commit_counts, last_commit, recent_commits = self._collect_commits(owner, repo, since)
+        if collaborators:
+            for item in collaborators:
+                login = item.get("login")
+                if not login:
+                    continue
+                perms = item.get("permissions") or {}
+                permission = (
+                    "admin" if perms.get("admin")
+                    else "write" if perms.get("push")
+                    else "read" if perms.get("pull")
+                    else "read"
+                )
+                _add_member(
+                    login,
+                    item.get("avatar_url", ""),
+                    item.get("html_url", ""),
+                    "owner" if login == owner_login else "collaborator",
+                    "admin" if login == owner_login else permission,
+                )
+        else:
+            # Fallback when the collaborators endpoint is not accessible.
+            for item in contributors:
+                login = item.get("login")
+                if not login:
+                    continue
+                _add_member(
+                    login,
+                    item.get("avatar_url", ""),
+                    item.get("html_url", ""),
+                    "owner" if login == owner_login else "contributor",
+                    "admin" if login == owner_login else "",
+                )
+
+        # The owner must always be a member - even if the collaborators
+        # endpoint omits them, they are shown (but never as the ONLY member).
+        if owner_login and owner_login not in seen:
+            _add_member(owner_login, owner_avatar, owner_url, "owner", "admin")
+
+        # Optional org team members are merged in (union), never replacing
+        # the collaborators - this preserves the GITHUB_TEAM feature.
+        if team_name:
+            try:
+                team_members = self.get_team_members(owner, team_name)
+            except GitHubError as exc:
+                logger.warning("Team '%s' not accessible (%s).", team_name, exc.message)
+                team_members = []
+            for item in team_members:
+                login = item.get("login")
+                if not login:
+                    continue
+                _add_member(
+                    login,
+                    item.get("avatar_url", ""),
+                    item.get("html_url", ""),
+                    "owner" if login == owner_login else "team member",
+                    "admin" if login == owner_login else "",
+                )
+
+        logger.info("Team members resolved: %d", len(members))
+
+        # --- Commits (each attributed to commit.author.login) ---
+        commit_counts, last_commit, recent_commits, commit_total = self._collect_commits(
+            owner, repo, since
+        )
+        logger.info("Commits fetched: %d (window: %d)", commit_total, len(recent_commits))
         member_index = {m["username"]: m for m in members}
         for login, count in commit_counts.items():
             if login in member_index:
@@ -897,6 +1069,7 @@ class GitHubAPI:
 
         # --- Pull requests (all states, filtered to the window) ---
         prs_all = self.get_pull_requests(owner, repo, state="all")
+        logger.info("Pull requests fetched: %d", len(prs_all))
         prs: list[dict[str, Any]] = []
         prs_in_window = [
             pr for pr in prs_all
@@ -963,6 +1136,7 @@ class GitHubAPI:
 
         # --- Issues (PRs excluded by the issues endpoint) ---
         issues_all = self.get_issues(owner, repo, state="all")
+        logger.info("Issues fetched: %d", len(issues_all))
         issues: list[dict[str, Any]] = []
         for issue in issues_all:
             if issue.get("pull_request"):
@@ -999,9 +1173,65 @@ class GitHubAPI:
         for login, parsed in last_commit.items():
             self._track_latest(latest_by_member, login, parsed.isoformat())
 
+<<<<<<< HEAD
         # --- Languages + repo metadata ---
         # `repo_meta` was already fetched up front (it is needed to identify
         # the repository owner when building the member list).
+=======
+        # --- Unified activity feed (commits + PRs + issues) ---
+        activity_feed: list[dict[str, Any]] = []
+        for c in recent_commits:
+            activity_feed.append(
+                {
+                    "author": c.get("author") or "unknown",
+                    "type": "push",
+                    "action": "pushed commit",
+                    "title": c.get("message", ""),
+                    "date": c.get("date", ""),
+                    "relative": relative_time_label(c.get("date", "")),
+                    "url": c.get("html_url", ""),
+                    "sha": c.get("sha", ""),
+                }
+            )
+        for pr in prs_in_window:
+            pr_author = (pr.get("user") or {}).get("login", "unknown")
+            if pr.get("merged_at"):
+                pr_action = "merged pull request"
+            elif pr.get("state") == "open":
+                pr_action = "opened pull request"
+            else:
+                pr_action = "closed pull request"
+            activity_feed.append(
+                {
+                    "author": pr_author,
+                    "type": "pull_request",
+                    "action": pr_action,
+                    "title": pr.get("title", ""),
+                    "date": pr.get("updated_at") or pr.get("created_at") or "",
+                    "relative": relative_time_label(pr.get("updated_at") or pr.get("created_at") or ""),
+                    "url": pr.get("html_url", ""),
+                }
+            )
+        for issue in issues:
+            issue_author = (issue.get("author") or "").strip() or "unknown"
+            activity_feed.append(
+                {
+                    "author": issue_author,
+                    "type": "issue",
+                    "action": (
+                        "closed issue" if issue.get("state") == "closed" else "opened issue"
+                    ),
+                    "title": issue.get("title", ""),
+                    "date": issue.get("updated_at") or issue.get("created_at") or "",
+                    "relative": relative_time_label(issue.get("updated_at") or issue.get("created_at") or ""),
+                    "url": issue.get("html_url", ""),
+                }
+            )
+        activity_feed.sort(key=lambda item: item.get("date") or "", reverse=True)
+        activity_feed = activity_feed[:50]
+
+        # --- Languages ---
+>>>>>>> f14184d (Update GitPulse team activity dashboard)
         try:
             languages = self.get_repository_languages(owner, repo)
         except GitHubError:
@@ -1018,7 +1248,8 @@ class GitHubAPI:
                     int((now - last).total_seconds() // 86400), 0
                 )
             member = activity_mod.enrich_member(member)
-            if member["activity_status"] == "ACTIVE":
+            member["is_active"] = member["activity_status"] == "ACTIVE"
+            if member["is_active"]:
                 active_members += 1
             member["score_reason"] = activity_mod.score_reason(
                 member["username"],
@@ -1056,17 +1287,17 @@ class GitHubAPI:
             pushes.append(commit)
         pushes.reverse()
 
-        total_commits = sum(commit_counts.values())
+        total_members = len(members)
         overview = {
-            "members": len(members),
+            "members": total_members,
+            # Active = activity within the last RECENTLY_ACTIVE_DAYS (7) days.
             "active_members": active_members,
+            # Inactive = everything else, so Active + Inactive always equals total.
+            "inactive_members": total_members - active_members,
             "recently_active_members": sum(
                 1 for m in members if m["activity_status"] == "RECENTLY ACTIVE"
             ),
-            "inactive_members": sum(
-                1 for m in members if m["activity_status"] == "INACTIVE"
-            ),
-            "total_commits": total_commits,
+            "total_commits": commit_total,
             "open_prs": sum(1 for pr in prs if pr["state"] == "open"),
             "merged_prs": sum(1 for pr in prs if pr["merged"]),
             "open_issues": sum(1 for i in issues if i["state"] == "open"),
@@ -1078,6 +1309,7 @@ class GitHubAPI:
             "team_name": team_name or repo,
             "overview": overview,
             "members": members,
+            "activity_feed": activity_feed,
             "pushes": pushes,
             "pull_requests": prs,
             "issues": issues,
@@ -1215,6 +1447,29 @@ class GitHubAPI:
             "languages": languages,
         }
 
+
+
+def relative_time_label(date_str: str) -> str:
+    """Human-friendly label like 'just now', '10 minutes ago' or '2 days ago'."""
+    if not date_str:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    seconds = max(int((datetime.now(timezone.utc) - parsed).total_seconds()), 0)
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        minutes = seconds // 60
+        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+    if seconds < 86400:
+        hours = seconds // 3600
+        return f"{hours} hour{'s' if hours != 1 else ''} ago"
+    days = seconds // 86400
+    if days == 1:
+        return "yesterday"
+    return f"{days} days ago"
 
 
 def compute_activity_score(member: dict[str, Any]) -> int:

@@ -101,10 +101,22 @@ def score_reason(
     return f"High activity because of {', '.join(parts)} in the selected period."
 
 
+def last_active_text(last_active_days: Optional[int]) -> str:
+    """A friendly label for the member's most recent activity."""
+    if last_active_days is None:
+        return "No activity"
+    if last_active_days == 0:
+        return "Today"
+    if last_active_days == 1:
+        return "Yesterday"
+    return f"{last_active_days} days ago"
+
+
 def enrich_member(member: dict[str, Any]) -> dict[str, Any]:
     """
-    Add activity_score, activity_status, activity_label and score_reason
-    to a member dict. Expects the raw metrics to already be present.
+    Add activity_score, activity_status, activity_label, score_reason,
+    is_active and last_active_text to a member dict. Expects the raw
+    metrics to already be present.
     """
     username = member.get("username", "unknown")
     commits = member.get("commits", 0) or 0
@@ -116,5 +128,7 @@ def enrich_member(member: dict[str, Any]) -> dict[str, Any]:
     member["activity_score"] = score
     member["activity_label"] = activity_label(score)
     member["activity_status"] = activity_status(member.get("last_active_days"))
+    member["is_active"] = member["activity_status"] == "ACTIVE"
+    member["last_active_text"] = last_active_text(member.get("last_active_days"))
     member["score_reason"] = score_reason(username, commits, prs, reviews, issues)
     return member

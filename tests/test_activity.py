@@ -72,6 +72,20 @@ class TestScoreReason:
         assert "1 review" in activity.score_reason("alice", 0, 0, 1, 0)
 
 
+class TestLastActiveText:
+    def test_no_activity(self):
+        assert activity.last_active_text(None) == "No activity"
+
+    def test_today(self):
+        assert activity.last_active_text(0) == "Today"
+
+    def test_yesterday(self):
+        assert activity.last_active_text(1) == "Yesterday"
+
+    def test_days_ago(self):
+        assert activity.last_active_text(12) == "12 days ago"
+
+
 class TestEnrichMember:
     def test_enriches_with_score_and_status(self):
         member = activity.enrich_member(
@@ -87,4 +101,20 @@ class TestEnrichMember:
         assert "activity_score" in member
         assert "activity_label" in member
         assert member["activity_status"] == "ACTIVE"
+        assert member["is_active"] is True
+        assert member["last_active_text"] == "2 days ago"
         assert member["score_reason"]
+
+    def test_no_activity_is_not_active(self):
+        member = activity.enrich_member(
+            {
+                "username": "bob",
+                "commits": 0,
+                "prs_created": 0,
+                "prs_reviewed": 0,
+                "issues_created": 0,
+                "last_active_days": None,
+            }
+        )
+        assert member["is_active"] is False
+        assert member["last_active_text"] == "No activity"

@@ -310,6 +310,20 @@ html, body {
 tr.sev-critical td:first-child { border-left: 3px solid var(--red); }
 tr.sev-high td:first-child { border-left: 3px solid var(--orange); }
 
+/* ---------- Status / type / permission badges ---------- */
+.badge-status { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.3px; padding: 4px 10px; border-radius: 999px; }
+.badge-status.st-active { background: rgba(46, 204, 113, 0.16); color: var(--green); }
+.badge-status.st-recently-active { background: rgba(241, 196, 15, 0.16); color: var(--yellow, #f1c40f); }
+.badge-status.st-inactive { background: rgba(255, 82, 82, 0.16); color: var(--red); }
+.badge-type { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.3px; padding: 3px 9px; border-radius: 999px; margin-left: 6px; }
+.badge-owner { background: rgba(124, 92, 255, 0.18); color: #b09aff; border: 1px solid rgba(124, 92, 255, 0.45); }
+.badge-perm-admin { background: rgba(255, 82, 82, 0.16); color: var(--red); }
+.badge-perm-write { background: rgba(241, 196, 15, 0.16); color: var(--yellow, #f1c40f); }
+.badge-perm-read { background: rgba(74, 168, 255, 0.16); color: var(--blue); }
+.ext-link { color: var(--text-3); text-decoration: none; margin-left: 4px; font-size: 0.8rem; }
+.ext-link:hover { color: var(--accent-2); }
+.refresh-form { margin: 0; }
+
 /* ---------- AI suggestion cards ---------- */
 .suggestion-card { display: flex; flex-direction: column; gap: 8px; }
 .sugg-top { display: flex; justify-content: space-between; align-items: center; }

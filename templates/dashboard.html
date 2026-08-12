@@ -3,6 +3,12 @@
 {% block page_title %}Team Dashboard{% endblock %}
 {% block badge %}{{ report.repo.name if report else 'no data' }}{% endblock %}
 
+{% block topbar_extra %}
+<form method="post" action="{{ url_for('refresh_dashboard') }}" class="refresh-form">
+    <button type="submit" class="btn btn-pulse btn-sm" title="Re-fetch collaborators, commits, PRs and issues from GitHub">↻ Refresh</button>
+</form>
+{% endblock %}
+
 {% block content %}
 
 {% if error %}
@@ -142,7 +148,6 @@
                 <div class="card-header-row"><h2>Member Status</h2></div>
                 <canvas id="statusChart" class="chart-canvas"
                         data-active="{{ report.overview.active_members|default(0) }}"
-                        data-recent="{{ report.overview.recently_active_members|default(0) }}"
                         data-inactive="{{ report.overview.inactive_members|default(0) }}"></canvas>
                 <div class="chart-empty" id="statusEmpty">No member data</div>
             </div>
@@ -166,8 +171,10 @@
                         <thead>
                             <tr>
                                 <th>Member</th>
-                                <th class="text-center">Role</th>
-                                <th class="text-center">Commits</th>
+                                <th class="text-center">Type</th>
+                                <th class="text-center">Permission</th>
+                                <th class="text-center">Commits<br><small class="muted">last {{ activity_window }}d</small></th>
+                                <th class="text-center">Total<br><small class="muted">all-time</small></th>
                                 <th class="text-center">PRs</th>
                                 <th class="text-center">Merged</th>
                                 <th class="text-center">Reviews</th>
@@ -182,25 +189,32 @@
                                 <td>
                                     <div class="member-cell">
                                         <img class="avatar" src="{{ m.avatar or url_for('static', filename='images/default-avatar.svg') }}" alt="{{ m.username }}">
-                                        <a class="member-name" href="{{ url_for('member_profile', username=m.username) }}">{{ m.username }}</a>
+                                        <div>
+                                            <a class="member-name" href="{{ url_for('member_profile', username=m.username) }}">{{ m.username }}</a>
+                                            {% if m.is_owner %}<span class="badge badge-type badge-owner">owner</span>{% endif %}
+                                            <a class="ext-link" href="{{ m.url or ('https://github.com/' ~ m.username) }}" target="_blank" rel="noopener" title="GitHub profile">↗</a>
+                                        </div>
                                     </div>
                                 </td>
+<<<<<<< HEAD
                                 <td class="text-center">
                                     <span class="badge badge-glass" {% if m.permissions %}title="permissions — admin: {{ m.permissions.admin|default(False) }}, write: {{ m.permissions.push|default(False) }}, read: {{ m.permissions.pull|default(False) }}"{% endif %}>{{ m.role|default('collaborator') }}</span>
                                     {% if m.pending %}<span class="badge badge-pending" title="This user has been invited to the repository but has not accepted yet.">Pending</span>{% endif %}
+=======
+                                <td class="text-center"><span class="badge badge-glass">{{ m.role|default('collaborator') }}</span></td>
+                                <td class="text-center">
+                                    <span class="badge badge-type badge-perm-{{ (m.permission|default('read'))|lower }}">{{ m.permission|default('read')|title }}</span>
+>>>>>>> f14184d (Update GitPulse team activity dashboard)
                                 </td>
                                 <td class="text-center">{{ m.commits }}</td>
+                                <td class="text-center">{{ m.commits_all_time|default(m.commits) }}</td>
                                 <td class="text-center">{{ m.prs_created|default(m.pr_count) }}</td>
                                 <td class="text-center">{{ m.prs_merged|default(0) }}</td>
                                 <td class="text-center">{{ m.prs_reviewed|default(0) }}</td>
                                 <td class="text-center">{{ m.issues_created|default(m.issue_count) }}</td>
                                 <td>
                                     <span class="badge badge-status st-{{ (m.activity_status|default('INACTIVE'))|lower|replace(' ', '-') }}">{{ m.activity_status|default('INACTIVE') }}</span>
-                                    {% if m.last_active %}
-                                        <small class="muted d-block">{{ m.last_active_days }}d ago</small>
-                                    {% else %}
-                                        <small class="muted d-block">—</small>
-                                    {% endif %}
+                                    <small class="muted d-block">{{ m.last_active_text|default('No activity') }}</small>
                                 </td>
                                 <td class="text-center">
                                     <div class="score-wrap" title="{{ m.score_reason|default('') }}">
@@ -210,7 +224,11 @@
                                 </td>
                             </tr>
                             {% else %}
+<<<<<<< HEAD
                             <tr><td colspan="9" class="muted text-center py-4">No collaborators found.</td></tr>
+=======
+                            <tr><td colspan="11" class="muted text-center py-4">No members found.</td></tr>
+>>>>>>> f14184d (Update GitPulse team activity dashboard)
                             {% endfor %}
                         </tbody>
                     </table>
@@ -242,23 +260,27 @@
         <div class="col-lg-7">
             <div class="glass card-pulse h-100">
                 <div class="card-header-row">
-                    <h2>Recent Pushes</h2>
-                    <span class="badge badge-glass">last {{ activity_window }}d</span>
+                    <h2>Recent Activity</h2>
+                    <span class="badge badge-glass">{{ report.activity_feed|default([])|length }} events · last {{ activity_window }}d</span>
                 </div>
                 <div class="feed-list">
-                    {% for p in report.pushes|default([]) %}
+                    {% for ev in report.activity_feed|default([]) %}
                     <div class="feed-item">
-                        <div class="feed-icon ic-blue">⌥</div>
+                        <div class="feed-icon ic-{{ 'green' if ev.type == 'push' else ('purple' if ev.type == 'pull_request' else 'orange') }}">{{ '⌥' if ev.type == 'push' else ('⇄' if ev.type == 'pull_request' else '◎') }}</div>
                         <div class="feed-body">
-                            <div class="feed-title">{{ p.message|default('') }}</div>
+                            <div class="feed-title">
+                                <strong>@{{ ev.author }}</strong>
+                                <span class="muted">{{ ev.action }}</span>
+                                {% if ev.url %}<a class="ext-link" href="{{ ev.url }}" target="_blank" rel="noopener" title="View on GitHub">↗</a>{% endif %}
+                            </div>
                             <div class="feed-meta">
-                                <strong>@{{ p.author }}</strong> · <code>{{ p.sha }}</code> · {{ (p.date or '')[:10] }}
-                                <span class="muted">(+{{ (p.stats|default({})).additions|default(0) }} −{{ (p.stats|default({})).deletions|default(0) }})</span>
+                                {{ ev.title|default('') }}{% if ev.sha %} · <code>{{ ev.sha }}</code>{% endif %}
+                                <span class="muted float-end">{{ ev.relative or (ev.date or '')[:10] }}</span>
                             </div>
                         </div>
                     </div>
                     {% else %}
-                    <p class="muted p-3 mb-0">No commits in the selected period.</p>
+                    <p class="muted p-3 mb-0">No activity in the selected period.</p>
                     {% endfor %}
                 </div>
             </div>
@@ -266,7 +288,7 @@
         <div class="col-lg-5">
             <div class="glass card-pulse h-100">
                 <div class="card-header-row">
-                    <h2>Recent Activity (Webhooks)</h2>
+                    <h2>Webhook Events</h2>
                     <span class="badge badge-glass">{{ recent_activity|length }} events</span>
                 </div>
                 <div class="feed-list">
