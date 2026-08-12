@@ -299,6 +299,64 @@ class GitHubAPI:
             out.extend(page)
         return out
 
+    def get_collaborators(self, owner: str, repo: str, per_page: int = 100) -> list[dict]:
+        """
+        Return the repository's actual collaborators via
+        GET /repos/{owner}/{repo}/collaborators (paginated).
+
+        Unlike /contributors (users who have committed), this lists every
+        user granted access to the repository, including collaborators who
+        have never pushed a commit. Each entry is normalized to the fields
+        the dashboard needs: username, avatar, url, role and permissions.
+
+        Requires the authenticated token to have push access to the repo;
+        callers should fall back to `get_contributors` on GitHubError.
+        """
+        out: list[dict] = []
+        for page in self._iter_pages(
+            f"/repos/{owner}/{repo}/collaborators", per_page=per_page
+        ):
+            out.extend(page)
+        return [
+            {
+                "username": item.get("login", "unknown"),
+                "avatar": item.get("avatar_url", ""),
+                "url": item.get("html_url", ""),
+                "role": self._collaborator_role(item),
+                "permissions": self._collaborator_permissions(item),
+            }
+            for item in out
+        ]
+
+    @staticmethod
+    def _collaborator_permissions(item: dict) -> dict[str, bool]:
+        """Extract the boolean permission flags GitHub returns for a collaborator."""
+        perms = item.get("permissions") or {}
+        return {
+            "admin": bool(perms.get("admin")),
+            "maintain": bool(perms.get("maintain")),
+            "push": bool(perms.get("push")),
+            "triage": bool(perms.get("triage")),
+            "pull": bool(perms.get("pull")),
+        }
+
+    @staticmethod
+    def _collaborator_role(item: dict) -> str:
+        """Derive a readable role from role_name (preferred) or permissions."""
+        role = item.get("role_name") or ""
+        if role:
+            return role
+        perms = item.get("permissions") or {}
+        if perms.get("admin"):
+            return "admin"
+        if perms.get("maintain"):
+            return "maintain"
+        if perms.get("push"):
+            return "write"
+        if perms.get("triage"):
+            return "triage"
+        return "read"
+
     def get_org_members(self, org: str, per_page: int = 100) -> list[dict]:
         """Return members of an organization (requires membership scope)."""
         out: list[dict] = []
@@ -644,31 +702,50 @@ class GitHubAPI:
         since = self._since_iso(days)
         logger.info("Building team report for %s/%s (%dd window)", owner, repo, days)
 
-        # --- Team source: org team if configured, else repo contributors ---
+        # --- Team source: org team if configured, else repo collaborators ---
+        # GitHub's /collaborators endpoint returns the actual members of the
+        # repository (not just people who have committed), so the dashboard
+        # shows everyone granted access. When the token cannot list
+        # collaborators we fall back to /contributors.
         members: list[dict[str, Any]] = []
         team_name = settings.GITHUB_TEAM or ""
         source = []
+        source_kind = "contributor"
         if team_name:
             try:
                 source = self.get_team_members(owner, team_name)
+                source_kind = "team member"
             except GitHubError as exc:
                 logger.warning(
-                    "Team '%s' not accessible (%s); falling back to contributors.",
+                    "Team '%s' not accessible (%s); falling back to collaborators.",
                     team_name, exc.message,
                 )
                 source = []
         if not source:
             try:
+                source = self.get_collaborators(owner, repo)
+                source_kind = "collaborator"
+            except GitHubError as exc:
+                logger.warning(
+                    "Could not list collaborators for %s/%s (%s); "
+                    "falling back to contributors.",
+                    owner, repo, exc.message,
+                )
+                source = []
+        if not source:
+            try:
                 source = self.get_contributors(owner, repo)
+                source_kind = "contributor"
             except GitHubError:
                 source = []
         for item in source:
             members.append(
                 {
-                    "username": item.get("login", "unknown"),
-                    "avatar": item.get("avatar_url", ""),
-                    "url": item.get("html_url", ""),
-                    "role": "team member" if team_name else "contributor",
+                    "username": item.get("login") or item.get("username") or "unknown",
+                    "avatar": item.get("avatar_url") or item.get("avatar") or "",
+                    "url": item.get("html_url") or item.get("url") or "",
+                    "role": item.get("role") or item.get("role_name") or source_kind,
+                    "permissions": item.get("permissions") or {},
                     "commits": 0,
                     "pr_count": 0,
                     "prs_created": 0,

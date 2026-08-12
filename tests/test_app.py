@@ -431,3 +431,74 @@ def test_api_github_select_repo_reports_access_denied(client, monkeypatch):
     assert "not found" in response.get_json()["error"]
     with client.session_transaction() as sess:
         assert "selected_repo" not in sess
+
+
+def test_api_team_collaborators_returns_collaborators(client, monkeypatch):
+    fake_report = {
+        "overview": {
+            "members": 2,
+            "active_members": 1,
+            "recently_active_members": 0,
+            "inactive_members": 1,
+            "total_commits": 5,
+            "open_prs": 0,
+            "merged_prs": 0,
+            "open_issues": 0,
+        },
+        "members": [
+            {
+                "username": "alice",
+                "role": "admin",
+                "permissions": {"admin": True, "maintain": False, "push": True, "triage": False, "pull": True},
+                "commits": 5,
+                "pr_count": 0,
+                "prs_created": 0,
+                "prs_open": 0,
+                "prs_merged": 0,
+                "prs_reviewed": 0,
+                "issue_count": 0,
+                "issues_created": 0,
+                "issues_closed": 0,
+                "last_active": "2024-01-01T00:00:00Z",
+                "last_active_days": 1,
+            },
+            {
+                "username": "bob",
+                "role": "read",
+                "permissions": {"admin": False, "maintain": False, "push": False, "triage": False, "pull": True},
+                "commits": 0,
+                "pr_count": 0,
+                "prs_created": 0,
+                "prs_open": 0,
+                "prs_merged": 0,
+                "prs_reviewed": 0,
+                "issue_count": 0,
+                "issues_created": 0,
+                "issues_closed": 0,
+                "last_active": None,
+                "last_active_days": None,
+            },
+        ],
+        "languages": {},
+        "repo": {"name": "o/r", "description": "", "stars": 0, "forks": 0, "open_issues": 0, "default_branch": "main"},
+    }
+    monkeypatch.setattr(GitHubAPI, "build_team_report", lambda self, o, r: fake_report)
+    with client.session_transaction() as sess:
+        sess["github_token"] = "t"
+        sess["github_user"] = "alice"
+        sess["selected_repo"] = "o/r"
+
+    response = client.get("/api/team/collaborators")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert [c["username"] for c in payload["collaborators"]] == ["alice", "bob"]
+    assert payload["collaborators"][0]["role"] == "admin"
+    assert payload["collaborators"][1]["permissions"]["pull"] is True
+    assert payload["overview"]["members"] == 2
+
+
+def test_api_team_collaborators_requires_login(client):
+    response = client.get("/api/team/collaborators")
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/login")

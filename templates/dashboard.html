@@ -185,7 +185,9 @@
                                         <a class="member-name" href="{{ url_for('member_profile', username=m.username) }}">{{ m.username }}</a>
                                     </div>
                                 </td>
-                                <td class="text-center"><span class="badge badge-glass">{{ m.role|default('contributor') }}</span></td>
+                                <td class="text-center">
+                                    <span class="badge badge-glass" {% if m.permissions %}title="permissions — admin: {{ m.permissions.admin|default(False) }}, write: {{ m.permissions.push|default(False) }}, read: {{ m.permissions.pull|default(False) }}"{% endif %}>{{ m.role|default('collaborator') }}</span>
+                                </td>
                                 <td class="text-center">{{ m.commits }}</td>
                                 <td class="text-center">{{ m.prs_created|default(m.pr_count) }}</td>
                                 <td class="text-center">{{ m.prs_merged|default(0) }}</td>
@@ -207,7 +209,7 @@
                                 </td>
                             </tr>
                             {% else %}
-                            <tr><td colspan="9" class="muted text-center py-4">No contributors found.</td></tr>
+                            <tr><td colspan="9" class="muted text-center py-4">No collaborators found.</td></tr>
                             {% endfor %}
                         </tbody>
                     </table>

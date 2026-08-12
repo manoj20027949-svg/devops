@@ -604,6 +604,27 @@ def register_api_routes(app: Flask) -> None:
             return jsonify({"error": error}), 400
         return jsonify({"members": report["members"]})
 
+    @app.route("/api/team/collaborators")
+    @login_required
+    def api_team_collaborators():
+        """
+        Return the repository's actual collaborators.
+
+        The list comes from GET /repos/{owner}/{repo}/collaborators so it
+        includes members who have been granted access even if they have
+        never committed. Each collaborator carries username, avatar, role,
+        permissions and per-member activity metrics.
+        """
+        report, error = _report_or_error()
+        if error:
+            return jsonify({"error": error}), 400
+        return jsonify(
+            {
+                "collaborators": report["members"],
+                "overview": report["overview"],
+            }
+        )
+
     @app.route("/api/team/activity")
     @login_required
     def api_team_activity():

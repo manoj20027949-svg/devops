@@ -96,6 +96,13 @@ class TestBuildTeamReport:
 
         def fake_request(method, path, params=None, retries=3):
             seen_paths.append(path)
+            if "collaborators" in path:
+                return [
+                    {"login": "alice", "role_name": "write",
+                     "permissions": {"admin": False, "maintain": False, "push": True, "triage": False, "pull": True}},
+                    {"login": "bob", "role_name": "read",
+                     "permissions": {"admin": False, "maintain": False, "push": False, "triage": False, "pull": True}},
+                ]
             if "contributors" in path:
                 return [{"login": "alice"}, {"login": "bob"}]
             if "commits" in path:
@@ -131,6 +138,9 @@ class TestBuildTeamReport:
         api = GitHubAPI("t")
 
         def fake_request(method, path, params=None, retries=3):
+            if "collaborators" in path:
+                return [{"login": "alice", "role_name": "write",
+                         "permissions": {"admin": False, "maintain": False, "push": True, "triage": False, "pull": True}}]
             if "contributors" in path:
                 return [{"login": "alice"}]
             if "commits" in path:
@@ -147,6 +157,123 @@ class TestBuildTeamReport:
 
         assert report["members"][0]["last_active"] == "2024-01-01T00:00:00.123456+00:00"
         assert report["members"][0]["last_active_days"] >= 0
+
+
+class TestCollaborators:
+    def test_get_collaborators_paginates_and_normalizes(self, monkeypatch):
+        api = GitHubAPI("t")
+        requested_pages = []
+
+        def fake_request(method, path, params=None, retries=3):
+            assert path == "/repos/o/r/collaborators"
+            page = (params or {}).get("page", 1)
+            requested_pages.append(page)
+            if page == 1:
+                return [
+                    {
+                        "login": "alice",
+                        "avatar_url": "https://x/alice.png",
+                        "html_url": "https://github.com/alice",
+                        "role_name": "admin",
+                        "permissions": {"admin": True, "maintain": False, "push": True, "triage": False, "pull": True},
+                    }
+                    for _ in range(10)
+                ]
+            return [
+                {
+                    "login": "bob",
+                    "avatar_url": "",
+                    "html_url": "",
+                    "role_name": "read",
+                    "permissions": {"admin": False, "maintain": False, "push": False, "triage": False, "pull": True},
+                }
+            ]
+
+        monkeypatch.setattr(api, "_request", fake_request)
+
+        collabs = api.get_collaborators("o", "r", per_page=10)
+
+        assert len(collabs) == 11
+        assert requested_pages == [1, 2]
+        assert collabs[0]["username"] == "alice"
+        assert collabs[0]["avatar"] == "https://x/alice.png"
+        assert collabs[0]["role"] == "admin"
+        assert collabs[0]["permissions"]["push"] is True
+        assert collabs[10]["username"] == "bob"
+        assert collabs[10]["role"] == "read"
+
+    def test_get_collaborators_derives_role_from_permissions(self, monkeypatch):
+        api = GitHubAPI("t")
+
+        def fake_request(method, path, params=None, retries=3):
+            return [
+                {
+                    "login": "carol",
+                    "avatar_url": "",
+                    "html_url": "",
+                    "role_name": "",
+                    "permissions": {"admin": False, "maintain": False, "push": True, "triage": False, "pull": True},
+                }
+            ]
+
+        monkeypatch.setattr(api, "_request", fake_request)
+
+        collabs = api.get_collaborators("o", "r")
+        assert collabs[0]["role"] == "write"
+
+    def test_build_team_report_includes_collaborator_without_commits(self, monkeypatch):
+        """A collaborator who never committed must still appear as a member."""
+        api = GitHubAPI("t")
+
+        def fake_request(method, path, params=None, retries=3):
+            if "collaborators" in path:
+                return [
+                    {"login": "alice", "role_name": "write",
+                     "permissions": {"admin": False, "maintain": False, "push": True, "triage": False, "pull": True}},
+                    {"login": "bob", "role_name": "read",
+                     "permissions": {"admin": False, "maintain": False, "push": False, "triage": False, "pull": True}},
+                ]
+            if "commits" in path:
+                return [{"author": {"login": "alice"}, "commit": {"author": {"date": "2024-01-01T00:00:00Z"}}}]
+            if "pulls" in path or "issues" in path:
+                return []
+            if "languages" in path:
+                return {"Python": 100}
+            return {"full_name": "o/r", "description": "", "stargazers_count": 0, "forks_count": 0, "open_issues_count": 0, "default_branch": "main"}
+
+        monkeypatch.setattr(api, "_request", fake_request)
+
+        report = api.build_team_report("o", "r")
+
+        usernames = {m["username"] for m in report["members"]}
+        assert usernames == {"alice", "bob"}
+        bob = next(m for m in report["members"] if m["username"] == "bob")
+        assert bob["role"] == "read"
+        assert bob["permissions"]["pull"] is True
+        assert report["overview"]["members"] == 2
+
+    def test_build_team_report_falls_back_to_contributors_when_collaborators_denied(self, monkeypatch):
+        api = GitHubAPI("t")
+
+        def fake_request(method, path, params=None, retries=3):
+            if "collaborators" in path:
+                raise GitHubError("403 Forbidden", status_code=403)
+            if "contributors" in path:
+                return [{"login": "alice"}]
+            if "commits" in path:
+                return []
+            if "pulls" in path or "issues" in path:
+                return []
+            if "languages" in path:
+                return {}
+            return {"full_name": "o/r", "description": "", "stargazers_count": 0, "forks_count": 0, "open_issues_count": 0, "default_branch": "main"}
+
+        monkeypatch.setattr(api, "_request", fake_request)
+
+        report = api.build_team_report("o", "r")
+
+        assert report["members"][0]["username"] == "alice"
+        assert report["members"][0]["role"] == "contributor"
 
 
 class TestTokenValidation:
