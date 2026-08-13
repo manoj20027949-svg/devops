@@ -626,13 +626,18 @@ class TestCollaboratorMembers:
         assert feed[0]["type"] == "push"
 
     def test_member_with_no_activity_is_inactive(self, monkeypatch):
+        from datetime import datetime, timedelta, timezone
+
         api = GitHubAPI("t")
+        two_days_ago = (
+            datetime.now(timezone.utc) - timedelta(days=2)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
         self._build(
             api,
             extra_responses={
                 "commits": [
                     {"sha": "a", "author": {"login": "mj-viro"}, "html_url": "u",
-                     "commit": {"author": {"date": "2026-08-10T00:00:00Z"}, "message": "recent commit"}},
+                     "commit": {"author": {"date": two_days_ago}, "message": "recent commit"}},
                 ]
             },
         )

@@ -138,6 +138,22 @@
 
     </div>
 </div>
+
+<!-- Global detail-modal container (populated by dashboard.js) -->
+<div id="gitpulseModal" class="gp-modal" aria-hidden="true">
+    <div class="gp-modal-backdrop" data-gp-close></div>
+    <div class="gp-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="gpModalTitle">
+        <div class="gp-modal-header">
+            <h2 id="gpModalTitle">Detail</h2>
+            <button type="button" class="gp-modal-close" data-gp-close aria-label="Close">×</button>
+        </div>
+        <div class="gp-modal-body" id="gpModalBody"></div>
+        <div class="gp-modal-footer">
+            <a class="btn btn-pulse btn-sm" id="gpModalLink" href="#" target="_blank" rel="noopener">Open on GitHub ↗</a>
+            <button type="button" class="btn btn-outline-secondary btn-sm" data-gp-close>Close</button>
+        </div>
+    </div>
+</div>
 {% endif %}
 
 <!-- Bootstrap JS -->

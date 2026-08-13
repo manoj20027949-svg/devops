@@ -692,6 +692,129 @@ def register_api_routes(app: Flask) -> None:
             return jsonify({"error": error}), 400
         return jsonify({"issues": report["issues"]})
 
+    @app.route("/api/repository")
+    @login_required
+    def api_repository():
+        """Return the currently selected repository's metadata."""
+        report, error = _report_or_error()
+        if error:
+            return jsonify({"error": error}), 400
+        return jsonify({"repo": report["repo"], "team_name": report["team_name"]})
+
+    @app.route("/api/overview")
+    @login_required
+    def api_overview():
+        """Return the dashboard overview metrics."""
+        report, error = _report_or_error()
+        if error:
+            return jsonify({"error": error}), 400
+        return jsonify(
+            {
+                "owner": report["owner"],
+                "repo": report["repo"],
+                "overview": report["overview"],
+                "languages": report["languages"],
+            }
+        )
+
+    @app.route("/api/activity")
+    @login_required
+    def api_activity():
+        """
+        Return the unified activity feed.
+
+        Query params: category (commit|pull_request|issue|member|other),
+        author, q (substring match on title/action), limit (default 50).
+        """
+        report, error = _report_or_error()
+        if error:
+            return jsonify({"error": error}), 400
+        feed = list(report.get("activity_feed") or [])
+        category = (request.args.get("category") or "").strip().lower()
+        author = (request.args.get("author") or "").strip().lower()
+        query = (request.args.get("q") or "").strip().lower()
+        try:
+            limit = max(1, min(int(request.args.get("limit") or 50), 200))
+        except (TypeError, ValueError):
+            limit = 50
+
+        if category:
+            feed = [item for item in feed if (item.get("category") or "").lower() == category]
+        if author:
+            feed = [item for item in feed if (item.get("actor") or "").lower() == author]
+        if query:
+            feed = [
+                item
+                for item in feed
+                if query in (item.get("title") or "").lower()
+                or query in (item.get("action") or "").lower()
+            ]
+        return jsonify({"activity": feed[:limit]})
+
+    @app.route("/api/commit/<sha>")
+    @login_required
+    def api_commit_detail(sha):
+        """Return a single commit's detail (files, stats, message)."""
+        owner, repo = _current_repo()
+        if not owner or not repo:
+            return jsonify({"error": "No repository selected."}), 400
+        api = get_api()
+        try:
+            detail = api.build_commit_detail(owner, repo, sha)
+        except GitHubError as exc:
+            return jsonify({"error": exc.message}), 400
+        return jsonify(detail)
+
+    @app.route("/api/pull-request/<int:number>")
+    @login_required
+    def api_pull_request_detail(number):
+        """Return a single pull request's rich detail view."""
+        owner, repo = _current_repo()
+        if not owner or not repo:
+            return jsonify({"error": "No repository selected."}), 400
+        api = get_api()
+        try:
+            detail = api.build_pr_detail(owner, repo, number)
+        except GitHubError as exc:
+            return jsonify({"error": exc.message}), 400
+        return jsonify(detail)
+
+    @app.route("/api/issue/<int:number>")
+    @login_required
+    def api_issue_detail(number):
+        """Return a single issue's rich detail view."""
+        owner, repo = _current_repo()
+        if not owner or not repo:
+            return jsonify({"error": "No repository selected."}), 400
+        api = get_api()
+        try:
+            detail = api.build_issue_detail(owner, repo, number)
+        except GitHubError as exc:
+            return jsonify({"error": exc.message}), 400
+        return jsonify(detail)
+
+    @app.route("/api/refresh", methods=["POST"])
+    @login_required
+    def api_refresh():
+        """
+        AJAX refresh: clear the in-memory GitHub HTTP cache and the cached
+        scan results, then reload the webhook activity list.
+        """
+        from utils.github_api import clear_http_cache
+
+        clear_http_cache()
+        app.extensions["scan_cache"] = {"data": None}
+        app.extensions["recent_activity"] = list(
+            app.extensions["store"].list_webhook_events(limit=20)
+        )
+        app.logger.info("API refresh requested by %s", session.get("github_user"))
+        return jsonify(
+            {
+                "ok": True,
+                "message": "GitHub data cache cleared. The next request re-fetches from GitHub.",
+            }
+        )
+
     @app.route("/api/errors")
     @login_required
     def api_errors():
@@ -810,6 +933,32 @@ def register_api_routes(app: Flask) -> None:
             return jsonify({"error": exc.message}), 400
         app.extensions["store"].save_analysis(
             "issue", f"#{number}", result, author=session.get("github_user")
+        )
+        return jsonify(result)
+
+    @app.route("/api/ai/analyze-repo", methods=["POST"])
+    @login_required
+    def api_ai_analyze_repo():
+        """
+        Repository-level health analysis + fix recommendations.
+
+        Rule-based by default (always available). When ANTHROPIC_API_KEY is
+        configured an AI narrative is added on top. Results are saved to
+        the store for the AI Fixes tab.
+        """
+        report, error = _load_report()
+        if error:
+            return jsonify({"error": error}), 400
+        result = ai_analyzer.analyze_repository(report)
+        if settings.anthropic_configured:
+            narrative = ai_analyzer.analyze_repository_ai(report)
+            if narrative:
+                result["ai_narrative"] = narrative
+                result["engine"] = "ai"
+        app.extensions["store"].save_analysis(
+            "repo", report.get("repo") or f"{report.get('owner')}/{report.get('repo')}",
+            result,
+            author=session.get("github_user"),
         )
         return jsonify(result)
 

@@ -399,6 +399,82 @@ tr.sev-high td:first-child { border-left: 3px solid var(--orange); }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @keyframes fadeUp { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
 
+/* ---------- Status badges ---------- */
+.badge-status.st-open { background: rgba(74, 168, 255, 0.16); color: var(--blue); }
+.badge-status.st-closed { background: rgba(255, 82, 82, 0.16); color: var(--red); }
+.badge-status.st-merged { background: rgba(155, 108, 255, 0.18); color: var(--purple); }
+
+/* ---------- Clickable stat cards ---------- */
+a.stat-card-link { display: block; color: inherit; text-decoration: none; }
+a.stat-card-link .stat-card { height: 100%; transition: transform 0.18s ease, border-color 0.18s ease; }
+a.stat-card-link:hover .stat-card { transform: translateY(-3px); border-color: rgba(124, 92, 255, 0.5); }
+a.stat-card-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius); }
+
+/* ---------- Clickable detail rows ---------- */
+.commit-row, .pr-row, .issue-row { cursor: pointer; }
+.commit-row:hover td, .pr-row:hover td, .issue-row:hover td { text-decoration: none; }
+
+/* ---------- Detail modal ---------- */
+body.modal-open-gp { overflow: hidden; }
+.gp-modal {
+    position: fixed; inset: 0; z-index: 1080;
+    display: none; align-items: center; justify-content: center;
+    padding: 20px;
+}
+.gp-modal.open { display: flex; }
+.gp-modal-backdrop {
+    position: absolute; inset: 0;
+    background: rgba(5, 8, 15, 0.72);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+}
+.gp-modal-dialog {
+    position: relative;
+    width: min(860px, 100%);
+    max-height: min(82vh, 820px);
+    display: flex; flex-direction: column;
+    background: linear-gradient(165deg, #151c2e, #0d1424);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    animation: fadeUp 0.22s ease;
+}
+.gp-modal-header {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--glass-border);
+}
+.gp-modal-header h2 { margin: 0; font-size: 1.02rem; font-weight: 700; overflow-wrap: anywhere; }
+.gp-modal-close {
+    background: none; border: none; color: var(--text-2);
+    font-size: 1.6rem; line-height: 1; cursor: pointer; padding: 0 4px;
+}
+.gp-modal-close:hover { color: var(--text-1); }
+.gp-modal-body { padding: 18px 20px; overflow-y: auto; color: var(--text-1); }
+.gp-modal-footer {
+    display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+    padding: 12px 20px;
+    border-top: 1px solid var(--glass-border);
+}
+.gp-detail-meta {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px;
+    padding: 10px 14px; margin-bottom: 14px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--glass-border);
+    border-radius: 12px;
+    font-size: 0.82rem; color: var(--text-2);
+}
+.gp-list { margin: 0; padding-left: 18px; color: var(--text-2); }
+.gp-list li { margin-bottom: 4px; }
+
+/* ---------- Repository health score ---------- */
+.repo-health-score {
+    min-width: 62px; height: 62px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 50%;
+    font-size: 1.35rem; font-weight: 800;
+}
+
 /* ---------- Responsive ---------- */
 @media (max-width: 992px) {
     .sidebar { position: fixed; transform: translateX(-100%); }
