@@ -229,6 +229,7 @@ html, body {
     vertical-align: middle;
     font-size: 1.05rem;
     line-height: 1;
+    cursor: pointer;
     transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease, transform 0.15s ease;
 }
 .btn-back:hover {
@@ -237,6 +238,13 @@ html, body {
     background: rgba(124, 92, 255, 0.12);
     text-decoration: none;
     transform: translateX(-2px);
+}
+.btn-back-label {
+    width: auto;
+    padding: 0 14px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    gap: 6px;
 }
 @media (max-width: 576px) {
     .btn-back { width: 32px; height: 32px; font-size: 0.95rem; }

@@ -575,3 +575,161 @@ def test_api_team_collaborators_requires_login(client):
     response = client.get("/api/team/collaborators")
     assert response.status_code == 302
     assert response.headers["Location"].endswith("/login")
+
+
+# ======================================================================
+# Team Members page (status filter)
+# ======================================================================
+def _member_report():
+    """A report with 5 members: 3 ACTIVE and 2 INACTIVE.
+
+    `is_active` mirrors what build_team_report sets (activity_status ==
+    "ACTIVE"), so the dashboard counts and the page filter use one source
+    of truth.
+    """
+    def member(username, is_active):
+        return {
+            "username": username,
+            "avatar": "",
+            "url": "",
+            "role": "collaborator",
+            "permission": "read",
+            "commits": 5,
+            "commits_all_time": 10,
+            "pr_count": 2,
+            "prs_created": 2,
+            "prs_merged": 1,
+            "prs_reviewed": 1,
+            "issue_count": 1,
+            "issues_created": 1,
+            "issues_closed": 0,
+            "activity_score": 70 if is_active else 20,
+            "activity_status": "ACTIVE" if is_active else "INACTIVE",
+            "is_active": is_active,
+            "last_active_text": "Today" if is_active else "30 days ago",
+        }
+
+    return {
+        "overview": {
+            "members": 5,
+            "active_members": 3,
+            "inactive_members": 2,
+            "total_commits": 25,
+            "open_prs": 0,
+            "merged_prs": 0,
+            "open_issues": 0,
+        },
+        "members": [
+            member("alice", True),
+            member("bob", True),
+            member("carol", True),
+            member("dave", False),
+            member("eve", False),
+        ],
+        "languages": {},
+        "repo": {"name": "o/r", "description": "", "stars": 0, "forks": 0, "open_issues": 0, "default_branch": "main"},
+    }
+
+
+def _get_team_members(client, path, monkeypatch):
+    monkeypatch.setattr(GitHubAPI, "build_team_report", lambda self, o, r: _member_report())
+    with client.session_transaction() as sess:
+        sess["github_token"] = "t"
+        sess["github_user"] = "alice"
+        sess["selected_repo"] = "o/r"
+    return client.get(path)
+
+
+def test_team_members_requires_login(client):
+    response = client.get("/team-members")
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/login")
+
+
+def test_team_members_shows_all_members(client, monkeypatch):
+    response = _get_team_members(client, "/team-members", monkeypatch)
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "All Members (5)" in html
+    for username in ("alice", "bob", "carol", "dave", "eve"):
+        assert username in html
+    assert "Clear Filter" not in html
+
+
+def test_team_members_active_filter_shows_only_active(client, monkeypatch):
+    response = _get_team_members(client, "/team-members?status=active", monkeypatch)
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "Active Members (3)" in html
+    for username in ("alice", "bob", "carol"):
+        assert f"/member/{username}" in html
+    assert "/member/dave" not in html
+    assert "/member/eve" not in html
+    assert "Clear Filter" in html
+    assert "/team-members" in html
+
+
+def test_team_members_inactive_filter_shows_only_inactive(client, monkeypatch):
+    response = _get_team_members(client, "/team-members?status=inactive", monkeypatch)
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "Inactive Members (2)" in html
+    for username in ("dave", "eve"):
+        assert f"/member/{username}" in html
+    assert "/member/alice" not in html
+    assert "/member/bob" not in html
+    assert "/member/carol" not in html
+    assert "Clear Filter" in html
+
+
+def test_team_members_active_count_matches_dashboard_overview(client, monkeypatch):
+    report = _member_report()
+    monkeypatch.setattr(GitHubAPI, "build_team_report", lambda self, o, r: report)
+    with client.session_transaction() as sess:
+        sess["github_token"] = "t"
+        sess["github_user"] = "alice"
+        sess["selected_repo"] = "o/r"
+
+    html = client.get("/team-members?status=active").get_data(as_text=True)
+
+    assert f"Active Members ({report['overview']['active_members']})" in html
+    assert f"All Members ({report['overview']['members']})" not in html
+
+
+def test_team_members_page_links_to_member_profiles(client, monkeypatch):
+    response = _get_team_members(client, "/team-members", monkeypatch)
+    html = response.get_data(as_text=True)
+
+    assert "/member/alice" in html
+    assert "/member/eve" in html
+
+
+def test_team_members_has_back_button_to_dashboard(client, monkeypatch):
+    for path in ("/team-members", "/team-members?status=active", "/team-members?status=inactive"):
+        response = _get_team_members(client, path, monkeypatch)
+        html = response.get_data(as_text=True)
+
+        assert response.status_code == 200
+        assert 'href="/dashboard"' in html
+        assert "← Back" in html
+        assert "Back to Team Dashboard" in html
+
+
+def test_dashboard_member_cards_link_to_team_members_page(client, monkeypatch):
+    monkeypatch.setattr(GitHubAPI, "build_team_report", lambda self, o, r: _member_report())
+    with client.session_transaction() as sess:
+        sess["github_token"] = "t"
+        sess["github_user"] = "alice"
+        sess["selected_repo"] = "o/r"
+
+    html = client.get("/dashboard").get_data(as_text=True)
+
+    assert 'href="/team-members"' in html
+    assert 'href="/team-members?status=active"' in html
+    assert 'href="/team-members?status=inactive"' in html
+    assert "Total Members" in html
+    assert "Active Members" in html
+    assert "Inactive Members" in html

@@ -62,8 +62,10 @@
 
     document.querySelectorAll(".stat-card-link").forEach(function (card) {
         card.addEventListener("click", function (event) {
+            var goto = card.dataset.goto;
+            if (!goto) return; // Real page navigation (member cards link to /team-members).
             event.preventDefault();
-            activateTab(card.dataset.goto);
+            activateTab(goto);
         });
     });
 

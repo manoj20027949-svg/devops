@@ -31,7 +31,7 @@
     <!-- Stat cards -->
     <div class="row g-4 stat-row">
         <div class="col-6 col-xl-3">
-            <a href="#" class="stat-card-link" data-goto="tab-members" title="View Team Members">
+            <a href="{{ url_for('team_members') }}" class="stat-card-link" title="View all Team Members">
                 <div class="glass card-pulse stat-card">
                     <div class="stat-icon ic-blue">👥</div>
                     <div class="stat-body">
@@ -42,7 +42,7 @@
             </a>
         </div>
         <div class="col-6 col-xl-3">
-            <a href="#" class="stat-card-link" data-goto="tab-members" title="View Team Members">
+            <a href="{{ url_for('team_members', status='active') }}" class="stat-card-link" title="View active Team Members">
                 <div class="glass card-pulse stat-card">
                     <div class="stat-icon ic-green">⚡</div>
                     <div class="stat-body">
@@ -53,7 +53,7 @@
             </a>
         </div>
         <div class="col-6 col-xl-3">
-            <a href="#" class="stat-card-link" data-goto="tab-members" title="View Team Members">
+            <a href="{{ url_for('team_members', status='inactive') }}" class="stat-card-link" title="View inactive Team Members">
                 <div class="glass card-pulse stat-card">
                     <div class="stat-icon ic-orange">◎</div>
                     <div class="stat-body">

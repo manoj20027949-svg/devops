@@ -378,6 +378,48 @@ def register_routes(app: Flask) -> None:
             selected_repo=_repo_full_name(),
         )
 
+    # --- Team Members (status-filterable) --------------------------------
+    @app.route("/team-members")
+    @login_required
+    def team_members():
+        """
+        List every team member, optionally filtered by activity status.
+
+        The filter uses the exact same `is_active` flag that the dashboard
+        uses to derive its Active/Inactive counts, so the numbers always
+        match. The flag is computed in build_team_report via
+        activity_mod.enrich_member (status == "ACTIVE").
+
+        ?status=active    -> only ACTIVE members
+        ?status=inactive  -> every non-ACTIVE member
+        no parameter      -> all members
+        """
+        report, error = _load_report()
+
+        status = (request.args.get("status") or "").strip().lower()
+        members = list((report or {}).get("members") or [])
+
+        filter_title = "All Members"
+        if status == "active":
+            members = [m for m in members if m.get("is_active")]
+            filter_title = "Active Members"
+        elif status == "inactive":
+            members = [m for m in members if not m.get("is_active")]
+            filter_title = "Inactive Members"
+        else:
+            status = ""
+
+        return render_template(
+            "team_members.html",
+            report=report,
+            members=members,
+            error=error,
+            filter_status=status,
+            filter_title=filter_title,
+            activity_window=settings.ACTIVITY_WINDOW_DAYS,
+            selected_repo=_repo_full_name(),
+        )
+
     # --- Standalone pages ------------------------------------------------
     # Team Reports / Code Review / Notifications / Settings are clean
     # "Coming Soon" placeholders - no fake data, just a clear status card.

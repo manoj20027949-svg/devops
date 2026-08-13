@@ -45,15 +45,13 @@
     function activeTargetForRoute() {
         if (currentRoute === "dashboard") {
             const hashTab = (window.location.hash || "").slice(1);
-            if (
-                hashTab &&
-                document.querySelector('.sidebar-nav [data-tab="' + hashTab + '"]')
-            ) {
+            if (hashTab && document.getElementById(hashTab)) {
                 return hashTab;
             }
             return "tab-overview";
         }
-        if (currentRoute === "member_profile") return "tab-members";
+        if (currentRoute === "team_members") return "page-team-members";
+        if (currentRoute === "member_profile") return "page-team-members";
         if (currentRoute === "reports") return "page-reports";
         if (currentRoute === "code_review") return "page-code-review";
         if (currentRoute === "notifications") return "page-notifications";
