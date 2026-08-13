@@ -356,8 +356,20 @@
         <div class="col-lg-5">
             <div class="glass card-pulse h-100">
                 <div class="card-header-row">
+<<<<<<< HEAD
                     <h2>Webhook Events</h2>
                     <span class="badge badge-glass">{{ recent_activity|length }} events</span>
+=======
+                    <h2>Recent Activity (Webhooks)</h2>
+                    <div class="webhook-status">
+                        {% if webhook_configured %}
+                        <span class="badge badge-status badge-ok" title="GitHub webhooks are delivering events to this instance.">Webhook Connected</span>
+                        {% else %}
+                        <span class="badge badge-status badge-off" title="Webhooks are optional — activity is still fetched from the GitHub API.">Webhook Not Configured (Optional)</span>
+                        {% endif %}
+                        <span class="badge badge-glass">{{ recent_activity|length }} events</span>
+                    </div>
+>>>>>>> 074071b (Fix sidebar vertical scrolling)
                 </div>
                 <div class="feed-list">
                     {% for ev in recent_activity %}
@@ -371,11 +383,10 @@
                         </div>
                     </div>
                     {% else %}
-                    <p class="muted p-3 mb-0">
-                        No webhook events yet. Set <code>GITHUB_WEBHOOK_SECRET</code> in .env and point
-                        GitHub webhooks at <code>/webhook/github</code>. The dashboard also refreshes
-                        from the GitHub API on every load.
-                    </p>
+                    <div class="feed-empty">
+                        <p class="muted mb-1">No webhook events received yet.</p>
+                        <p class="muted small mb-0">Activity is still fetched from the GitHub API on every load, so webhooks are optional.</p>
+                    </div>
                     {% endfor %}
                 </div>
             </div>

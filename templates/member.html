@@ -1,6 +1,10 @@
 {% extends "base.html" %}
 {% block title %}{{ profile.username }}{% endblock %}
-{% block page_title %}Member Profile{% endblock %}
+{% block page_title %}
+<a class="btn btn-icon btn-back" href="{{ url_for('dashboard') }}#tab-members"
+   title="Back to Team Members" aria-label="Back to Team Members">←</a>
+Member Profile
+{% endblock %}
 {% block badge %}@{{ profile.username }}{% endblock %}
 
 {% block content %}

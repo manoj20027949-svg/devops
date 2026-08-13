@@ -328,6 +328,7 @@ def register_routes(app: Flask) -> None:
             activity_window=settings.ACTIVITY_WINDOW_DAYS,
             ai_errors_count=ai_errors_count,
             ai_fixed_count=ai_fixed_count,
+            webhook_configured=bool(settings.GITHUB_WEBHOOK_SECRET),
         )
 
     # --- Dashboard refresh (re-fetch collaborators + activity) ------------
@@ -374,6 +375,54 @@ def register_routes(app: Flask) -> None:
             profile=profile,
             suggestions=[s.to_dict() for s in member_suggestions],
             ai_enabled=settings.anthropic_configured,
+            selected_repo=_repo_full_name(),
+        )
+
+    # --- Standalone pages ------------------------------------------------
+    # Team Reports / Code Review / Notifications / Settings are clean
+    # "Coming Soon" placeholders - no fake data, just a clear status card.
+
+    @app.route("/reports")
+    @login_required
+    def reports():
+        return render_template(
+            "coming_soon.html",
+            page_title="Team Reports",
+            icon="▤",
+            description="Exportable team performance and engagement reports will land here soon.",
+            selected_repo=_repo_full_name(),
+        )
+
+    @app.route("/code-review")
+    @login_required
+    def code_review():
+        return render_template(
+            "coming_soon.html",
+            page_title="Code Review",
+            icon="◉",
+            description="Centralized pull-request review queues and review guidance will live here.",
+            selected_repo=_repo_full_name(),
+        )
+
+    @app.route("/notifications")
+    @login_required
+    def notifications():
+        return render_template(
+            "coming_soon.html",
+            page_title="Notifications",
+            icon="☼",
+            description="Delivery of team alerts and activity digests will be configured here.",
+            selected_repo=_repo_full_name(),
+        )
+
+    @app.route("/settings")
+    @login_required
+    def settings_page():
+        return render_template(
+            "coming_soon.html",
+            page_title="Settings",
+            icon="⚙",
+            description="Application, team and notification preferences will be managed here.",
             selected_repo=_repo_full_name(),
         )
 

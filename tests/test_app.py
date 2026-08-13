@@ -185,6 +185,65 @@ def test_dashboard_keeps_app_shell(client, monkeypatch):
     assert "Team Dashboard" in html
 
 
+def test_dashboard_sidebar_has_section_labels(client, monkeypatch):
+    fake_report = {
+        "overview": {"members": 0, "total_commits": 0, "open_prs": 0, "open_issues": 0},
+        "members": [],
+        "languages": {},
+        "repo": {
+            "name": "o/r",
+            "description": "",
+            "stars": 0,
+            "forks": 0,
+            "open_issues": 0,
+            "default_branch": "main",
+        },
+    }
+    monkeypatch.setattr(GitHubAPI, "build_team_report", lambda self, o, r: fake_report)
+    with client.session_transaction() as sess:
+        sess["github_token"] = "t"
+        sess["github_user"] = "alice"
+        sess["selected_repo"] = "o/r"
+
+    html = client.get("/dashboard").get_data(as_text=True)
+
+    for label in ("Overview", "Team", "Development", "AI Tools", "Security", "System"):
+        assert label in html
+    assert "Team Reports" in html
+    assert "Code Review" in html
+    assert "Notifications" in html
+    assert "Settings" in html
+    assert "data-route=" in html
+
+
+def test_placeholder_pages_require_login(client):
+    for path in ("/reports", "/code-review", "/notifications", "/settings"):
+        response = client.get(path)
+        assert response.status_code == 302
+        assert response.headers["Location"].endswith("/login")
+
+
+def test_placeholder_pages_render_coming_soon(client):
+    pages = [
+        ("/reports", "Team Reports"),
+        ("/code-review", "Code Review"),
+        ("/notifications", "Notifications"),
+        ("/settings", "Settings"),
+    ]
+    for path, title in pages:
+        with client.session_transaction() as sess:
+            sess["github_token"] = "t"
+            sess["github_user"] = "alice"
+
+        response = client.get(path)
+        html = response.get_data(as_text=True)
+
+        assert response.status_code == 200
+        assert title in html
+        assert "Coming Soon" in html
+        assert "sidebar-nav" in html
+
+
 def test_dashboard_renders_ai_tabs_with_rich_report(client, monkeypatch):
     """The new AI-powered dashboard tabs render without template errors."""
     fake_report = {

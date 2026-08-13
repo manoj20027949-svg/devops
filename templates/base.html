@@ -19,7 +19,7 @@
     <!-- GitPulse styles -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
-<body>
+<body data-route="{{ request.endpoint or '' }}">
 
 {% if _error_page is defined %}
     <!-- ========== Error page (404 / 500) ========== -->
@@ -48,35 +48,86 @@
         </div>
 
         <nav class="nav flex-column sidebar-nav">
-            <a class="nav-link active" href="#" data-tab="tab-overview">
-                <span class="nav-icon">◈</span> Overview
+            <div class="nav-section">Overview</div>
+            <a class="nav-link" href="{{ url_for('dashboard') }}#tab-overview" data-tab="tab-overview">
+                <span class="nav-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+                </span> Overview
             </a>
-            <a class="nav-link" href="#" data-tab="tab-members">
-                <span class="nav-icon">◎</span> Team Members
+
+            <div class="nav-section">Team</div>
+            <a class="nav-link" href="{{ url_for('dashboard') }}#tab-members" data-tab="tab-members">
+                <span class="nav-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                </span> Team Members
             </a>
-            <a class="nav-link" href="#" data-tab="tab-activity">
-                <span class="nav-icon">⇄</span> Activity
+            <a class="nav-link" href="{{ url_for('dashboard') }}#tab-activity" data-tab="tab-activity">
+                <span class="nav-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                </span> Activity
             </a>
-            <a class="nav-link" href="#" data-tab="tab-commits">
-                <span class="nav-icon">⌥</span> Commits
+            <a class="nav-link" href="{{ url_for('reports') }}" data-page="page-reports">
+                <span class="nav-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                </span> Team Reports
             </a>
-            <a class="nav-link" href="#" data-tab="tab-prs">
-                <span class="nav-icon">⇃</span> Pull Requests
+
+            <div class="nav-section">Development</div>
+            <a class="nav-link" href="{{ url_for('dashboard') }}#tab-commits" data-tab="tab-commits">
+                <span class="nav-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><line x1="12" y1="3" x2="12" y2="8"/><line x1="12" y1="16" x2="12" y2="21"/></svg>
+                </span> Commits
             </a>
-            <a class="nav-link" href="#" data-tab="tab-issues">
-                <span class="nav-icon">◎</span> Issues
+            <a class="nav-link" href="{{ url_for('dashboard') }}#tab-prs" data-tab="tab-prs">
+                <span class="nav-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/></svg>
+                </span> Pull Requests
             </a>
-            <a class="nav-link" href="#" data-tab="tab-ai-analysis">
-                <span class="nav-icon">✦</span> AI Analysis
+            <a class="nav-link" href="{{ url_for('code_review') }}" data-page="page-code-review">
+                <span class="nav-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                </span> Code Review
             </a>
-            <a class="nav-link" href="#" data-tab="tab-ai-fixes">
-                <span class="nav-icon">⚒</span> AI Fixes
+            <a class="nav-link" href="{{ url_for('dashboard') }}#tab-issues" data-tab="tab-issues">
+                <span class="nav-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/></svg>
+                </span> Issues
             </a>
-            <a class="nav-link" href="#" data-tab="tab-coaching">
-                <span class="nav-icon">✦</span> Coaching
+
+            <div class="nav-section">AI Tools</div>
+            <a class="nav-link" href="{{ url_for('dashboard') }}#tab-ai-analysis" data-tab="tab-ai-analysis">
+                <span class="nav-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.7a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3z"/></svg>
+                </span> AI Analysis
             </a>
-            <a class="nav-link" href="#" data-tab="tab-scanner">
-                <span class="nav-icon">⌘</span> Security Scanner
+            <a class="nav-link" href="{{ url_for('dashboard') }}#tab-ai-fixes" data-tab="tab-ai-fixes">
+                <span class="nav-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4.5 4.5 0 0 0-6.1 6.1L3 18l3 3 5.6-5.6a4.5 4.5 0 0 0 6.1-6.1l-3.4 3.4-2.9-2.9z"/></svg>
+                </span> AI Fixes
+            </a>
+            <a class="nav-link" href="{{ url_for('dashboard') }}#tab-coaching" data-tab="tab-coaching">
+                <span class="nav-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.4 1 2.3h6c0-.9.4-1.8 1-2.3A7 7 0 0 0 12 2z"/></svg>
+                </span> Coaching
+            </a>
+
+            <div class="nav-section">Security</div>
+            <a class="nav-link" href="{{ url_for('dashboard') }}#tab-scanner" data-tab="tab-scanner">
+                <span class="nav-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                </span> Security Scanner
+            </a>
+
+            <div class="nav-section">System</div>
+            <a class="nav-link" href="{{ url_for('notifications') }}" data-page="page-notifications">
+                <span class="nav-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                </span> Notifications
+            </a>
+            <a class="nav-link" href="{{ url_for('settings_page') }}" data-page="page-settings">
+                <span class="nav-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                </span> Settings
             </a>
         </nav>
 

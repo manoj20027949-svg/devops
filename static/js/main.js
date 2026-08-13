@@ -28,21 +28,56 @@
     // ---------- Tab navigation ----------
     const navLinks = document.querySelectorAll(".sidebar-nav .nav-link");
     const panes = document.querySelectorAll(".tab-pane");
+    const currentRoute = document.body.dataset.route || "";
 
     function activateTab(targetId) {
         panes.forEach(function (pane) {
             pane.classList.toggle("active", pane.id === targetId);
         });
         navLinks.forEach(function (link) {
-            link.classList.toggle("active", link.dataset.tab === targetId);
+            const isTab = link.dataset.tab === targetId;
+            const isPage = link.dataset.page === targetId;
+            link.classList.toggle("active", isTab || isPage);
         });
     }
 
+    // Determine which sidebar item should be highlighted for the current page.
+    function activeTargetForRoute() {
+        if (currentRoute === "dashboard") {
+            const hashTab = (window.location.hash || "").slice(1);
+            if (
+                hashTab &&
+                document.querySelector('.sidebar-nav [data-tab="' + hashTab + '"]')
+            ) {
+                return hashTab;
+            }
+            return "tab-overview";
+        }
+        if (currentRoute === "member_profile") return "tab-members";
+        if (currentRoute === "reports") return "page-reports";
+        if (currentRoute === "code_review") return "page-code-review";
+        if (currentRoute === "notifications") return "page-notifications";
+        if (currentRoute === "settings_page") return "page-settings";
+        return null;
+    }
+
+    const initialTarget = activeTargetForRoute();
+    if (initialTarget) activateTab(initialTarget);
+
     navLinks.forEach(function (link) {
         link.addEventListener("click", function (event) {
-            event.preventDefault();
-            activateTab(link.dataset.tab);
             if (sidebar && window.innerWidth <= 992) sidebar.classList.remove("open");
+            const tab = link.dataset.tab;
+            if (tab && currentRoute === "dashboard") {
+                // Dashboard tabs switch in place (no full page reload).
+                event.preventDefault();
+                activateTab(tab);
+                if (window.history && window.history.replaceState) {
+                    window.history.replaceState(null, "", "#" + tab);
+                }
+            }
+            // Tab links clicked from other pages and standalone page links
+            // fall through to their normal href navigation.
         });
     });
 
@@ -58,6 +93,24 @@
             }, 50);
         });
     }
+
+    // ---------- Sidebar height ----------
+    // The menu scrolls independently inside the sidebar, so the sidebar must
+    // always match the visible viewport. Modern browsers use 100dvh via CSS;
+    // fall back to window.innerHeight for older ones (handles mobile browser
+    // chrome so the bottom menu items are never cut off).
+    function fitSidebarHeight() {
+        const sidebarEl = document.getElementById("sidebar");
+        if (!sidebarEl) return;
+        const supportsDvh =
+            window.CSS && window.CSS.supports && window.CSS.supports("height", "100dvh");
+        if (!supportsDvh) {
+            sidebarEl.style.height = window.innerHeight + "px";
+        }
+    }
+    fitSidebarHeight();
+    window.addEventListener("resize", fitSidebarHeight);
+    window.addEventListener("orientationchange", fitSidebarHeight);
 
     // ---------- Auto-dismiss alerts ----------
     window.setTimeout(function () {
