@@ -186,6 +186,136 @@
         }
     }
 
+    // ---------- Team Reports: commits per member bar ----------
+    const reportsCommitsCanvas = document.getElementById("reportsCommitsChart");
+    if (reportsCommitsCanvas) {
+        let labels = [];
+        let values = [];
+        try {
+            labels = JSON.parse(reportsCommitsCanvas.dataset.labels || "[]");
+            values = JSON.parse(reportsCommitsCanvas.dataset.values || "[]");
+        } catch (err) {
+            console.error("GitPulse: bad reports commits chart data", err);
+        }
+
+        if (values.length > 0) {
+            new Chart(reportsCommitsCanvas, {
+                type: "bar",
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: "Commits",
+                        data: values,
+                        backgroundColor: "rgba(124, 92, 255, 0.55)",
+                        borderColor: "#7c5cff",
+                        borderWidth: 1,
+                        borderRadius: 8,
+                    }],
+                },
+                options: {
+                    indexAxis: "y",
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { beginAtZero: true, grid: chartDefaults.grid, ticks: { precision: 0 } },
+                        y: { grid: { display: false } },
+                    },
+                    plugins: { legend: { display: false } },
+                },
+            });
+        } else {
+            const empty = document.getElementById("reportsCommitsEmpty");
+            if (empty) empty.classList.add("show");
+        }
+    }
+
+    // ---------- Team Reports: activity score per member bar ----------
+    const reportsScoreCanvas = document.getElementById("reportsScoreChart");
+    if (reportsScoreCanvas) {
+        let labels = [];
+        let values = [];
+        try {
+            labels = JSON.parse(reportsScoreCanvas.dataset.labels || "[]");
+            values = JSON.parse(reportsScoreCanvas.dataset.values || "[]");
+        } catch (err) {
+            console.error("GitPulse: bad reports score chart data", err);
+        }
+
+        if (values.length > 0) {
+            new Chart(reportsScoreCanvas, {
+                type: "bar",
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: "Activity score",
+                        data: values,
+                        backgroundColor: "rgba(0, 212, 255, 0.55)",
+                        borderColor: "#00d4ff",
+                        borderWidth: 1,
+                        borderRadius: 8,
+                    }],
+                },
+                options: {
+                    indexAxis: "y",
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { min: 0, max: 100, grid: chartDefaults.grid, ticks: { precision: 0 } },
+                        y: { grid: { display: false } },
+                    },
+                    plugins: { legend: { display: false } },
+                },
+            });
+        } else {
+            const empty = document.getElementById("reportsScoreEmpty");
+            if (empty) empty.classList.add("show");
+        }
+    }
+
+    // ---------- Team Reports: weekly activity line ----------
+    const reportsWeeklyCanvas = document.getElementById("reportsWeeklyChart");
+    if (reportsWeeklyCanvas) {
+        let labels = [];
+        let values = [];
+        try {
+            labels = JSON.parse(reportsWeeklyCanvas.dataset.labels || "[]");
+            values = JSON.parse(reportsWeeklyCanvas.dataset.values || "[]");
+        } catch (err) {
+            console.error("GitPulse: bad reports weekly chart data", err);
+        }
+
+        if (values.length > 0) {
+            new Chart(reportsWeeklyCanvas, {
+                type: "line",
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: "Events",
+                        data: values,
+                        borderColor: "#2ecc71",
+                        backgroundColor: "rgba(46, 204, 113, 0.15)",
+                        fill: true,
+                        tension: 0.3,
+                        pointBackgroundColor: "#2ecc71",
+                        borderWidth: 2,
+                    }],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { grid: { display: false } },
+                        y: { beginAtZero: true, grid: chartDefaults.grid, ticks: { precision: 0 } },
+                    },
+                    plugins: { legend: { display: false } },
+                },
+            });
+        } else {
+            const empty = document.getElementById("reportsWeeklyEmpty");
+            if (empty) empty.classList.add("show");
+        }
+    }
+
     // ---------- Member page language doughnut ----------
     const langMemberCanvas = document.getElementById("langMemberChart");
     if (langMemberCanvas) {

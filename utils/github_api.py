@@ -872,9 +872,12 @@ class GitHubAPI:
     def _since_iso(self, days: int) -> str:
         return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat() + "Z"
 
-    def _collect_commits(self, owner: str, repo: str, since: str):
+    def _collect_commits(
+        self, owner: str, repo: str, since: str, until: Optional[str] = None
+    ):
         """
-        Return (counts, latest_dates, recent_list, total) for commits since `since`.
+        Return (counts, latest_dates, recent_list, total) for commits between
+        `since` and `until` (both ISO strings). `until` is optional.
 
         ``counts`` maps a GitHub login to the number of commits authored by
         that account (matched via ``commit.author.login``). Commits whose
@@ -886,8 +889,11 @@ class GitHubAPI:
         latest: dict[str, datetime] = {}
         recent: list[dict] = []
         total = 0
+        params: dict[str, Any] = {"since": since}
+        if until:
+            params["until"] = until
         for page in self._iter_pages(
-            f"/repos/{owner}/{repo}/commits", params={"since": since}, per_page=100
+            f"/repos/{owner}/{repo}/commits", params=params, per_page=100
         ):
             for commit in page:
                 total += 1
@@ -928,13 +934,24 @@ class GitHubAPI:
             for commit in page:
                 yield commit
 
-    def build_team_report(self, owner: str, repo: str, days: Optional[int] = None) -> dict[str, Any]:
+    def build_team_report(
+        self,
+        owner: str,
+        repo: str,
+        days: Optional[int] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+    ) -> dict[str, Any]:
         """
         Aggregate everything needed by the dashboard into one structure.
 
         Team members come from the real repository collaborators
         (GET /repos/{owner}/{repo}/collaborators), with the repository owner
         guaranteed to be present and GITHUB_TEAM members merged in as well.
+
+        The activity window is the last `days` days (default
+        ACTIVITY_WINDOW_DAYS). For exact ranges pass explicit `since`/`until`
+        ISO strings instead - both are optional and any combination works.
 
         Returns a dict with:
             overview:   {members, active/inactive counts, commits, PRs, issues}
@@ -949,8 +966,9 @@ class GitHubAPI:
         from utils import activity as activity_mod
 
         days = days or settings.ACTIVITY_WINDOW_DAYS
-        since = self._since_iso(days)
-        logger.info("GitHub repository: %s/%s (%dd activity window)", owner, repo, days)
+        if since is None:
+            since = self._since_iso(days)
+        logger.info("GitHub repository: %s/%s (since %s, until %s)", owner, repo, since, until)
 
         # --- Repo metadata (owner identity is used below) ---
         try:
@@ -1138,7 +1156,7 @@ class GitHubAPI:
 
         # --- Commits (each attributed to commit.author.login) ---
         commit_counts, last_commit, recent_commits, commit_total = self._collect_commits(
-            owner, repo, since
+            owner, repo, since, until
         )
         logger.info("Commits fetched: %d (window: %d)", commit_total, len(recent_commits))
         member_index = {m["username"]: m for m in members}
@@ -1153,7 +1171,9 @@ class GitHubAPI:
         prs: list[dict[str, Any]] = []
         prs_in_window = [
             pr for pr in prs_all
-            if self._within_window(pr.get("created_at") or pr.get("updated_at"), since)
+            if self._within_window(
+                pr.get("created_at") or pr.get("updated_at"), since, until
+            )
         ]
         for pr in prs_in_window[:40]:
             number = pr.get("number", 0)
@@ -1221,7 +1241,9 @@ class GitHubAPI:
         for issue in issues_all:
             if issue.get("pull_request"):
                 continue
-            if not self._within_window(issue.get("created_at") or issue.get("updated_at"), since):
+            if not self._within_window(
+                issue.get("created_at") or issue.get("updated_at"), since, until
+            ):
                 continue
             author = (issue.get("user") or {}).get("login", "")
             if author:
@@ -1327,7 +1349,7 @@ class GitHubAPI:
             events = []
         for event in events:
             item = self._event_feed_item(event)
-            if item:
+            if item and self._within_window(item.get("date"), since, until):
                 activity_feed.append(item)
 
         activity_feed.sort(key=lambda item: item.get("date") or "", reverse=True)
@@ -1473,8 +1495,12 @@ class GitHubAPI:
         }
 
     @staticmethod
-    def _within_window(date_str: Optional[str], since: str) -> bool:
-        """True when an ISO date is newer than `since`."""
+    def _within_window(
+        date_str: Optional[str],
+        since: str,
+        until: Optional[str] = None,
+    ) -> bool:
+        """True when an ISO date is between `since` and `until` (both ISO)."""
         if not date_str:
             return False
         try:
@@ -1484,8 +1510,17 @@ class GitHubAPI:
         try:
             since_parsed = datetime.fromisoformat(since.replace("Z", "+00:00"))
         except ValueError:
-            return True
-        return parsed >= since_parsed
+            since_parsed = None
+        if since_parsed is not None and parsed < since_parsed:
+            return False
+        if until:
+            try:
+                until_parsed = datetime.fromisoformat(until.replace("Z", "+00:00"))
+            except ValueError:
+                until_parsed = None
+            if until_parsed is not None and parsed > until_parsed:
+                return False
+        return True
 
     @staticmethod
     def _track_latest(

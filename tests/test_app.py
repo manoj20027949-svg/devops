@@ -217,7 +217,8 @@ def test_dashboard_sidebar_has_section_labels(client, monkeypatch):
 
 
 def test_placeholder_pages_require_login(client):
-    for path in ("/reports", "/code-review", "/notifications", "/settings"):
+    for path in ("/reports", "/reports/export/csv", "/reports/export/pdf",
+                 "/code-review", "/notifications", "/settings"):
         response = client.get(path)
         assert response.status_code == 302
         assert response.headers["Location"].endswith("/login")
@@ -225,7 +226,6 @@ def test_placeholder_pages_require_login(client):
 
 def test_placeholder_pages_render_coming_soon(client):
     pages = [
-        ("/reports", "Team Reports"),
         ("/code-review", "Code Review"),
         ("/notifications", "Notifications"),
         ("/settings", "Settings"),
@@ -733,3 +733,78 @@ def test_dashboard_member_cards_link_to_team_members_page(client, monkeypatch):
     assert "Total Members" in html
     assert "Active Members" in html
     assert "Inactive Members" in html
+
+
+# ======================================================================
+# Team Reports page + exports
+# ======================================================================
+def _get_reports(client, path, monkeypatch):
+    monkeypatch.setattr(GitHubAPI, "build_team_report", lambda self, o, r: _member_report())
+    with client.session_transaction() as sess:
+        sess["github_token"] = "t"
+        sess["github_user"] = "alice"
+        sess["selected_repo"] = "o/r"
+    return client.get(path)
+
+
+def test_reports_page_requires_login(client):
+    response = client.get("/reports")
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/login")
+
+
+def test_reports_page_renders_summary_members_and_analysis(client, monkeypatch):
+    response = _get_reports(client, "/reports", monkeypatch)
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "Report Period" in html
+    assert "Member Performance" in html
+    assert "Top Contributors" in html
+    assert "Team Insights" in html
+    assert "Team Analysis" in html
+    # Summary stats come from the real report data.
+    assert "5" in html  # total members
+    assert "alice" in html
+    # Export buttons are present.
+    assert "/reports/export/csv" in html
+    assert "/reports/export/pdf" in html
+
+
+def test_reports_page_range_selector_preserves_query(client, monkeypatch):
+    response = _get_reports(client, "/reports?period=7d", monkeypatch)
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "Last 7 Days" in html
+    assert 'value="7d" selected' in html
+
+
+def test_reports_export_csv(client, monkeypatch):
+    response = _get_reports(client, "/reports/export/csv", monkeypatch)
+
+    assert response.status_code == 200
+    assert response.mimetype == "text/csv"
+    assert response.headers["Content-Disposition"].startswith("attachment;")
+    assert ".csv" in response.headers["Content-Disposition"]
+    text = response.get_data(as_text=True)
+    assert "Member" in text
+    assert "alice" in text
+    assert "GitPulse Team Report" in text
+
+
+def test_reports_export_pdf(client, monkeypatch):
+    response = _get_reports(client, "/reports/export/pdf", monkeypatch)
+
+    assert response.status_code == 200
+    assert response.mimetype == "application/pdf"
+    assert response.headers["Content-Disposition"].startswith("attachment;")
+    assert ".pdf" in response.headers["Content-Disposition"]
+    data = response.data
+    assert data[:5] == b"%PDF-"
+    assert data.rstrip().endswith(b"%%EOF")
+
+
+def test_reports_export_unknown_format_returns_404(client, monkeypatch):
+    response = _get_reports(client, "/reports/export/docx", monkeypatch)
+    assert response.status_code == 404

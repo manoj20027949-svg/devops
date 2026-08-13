@@ -607,6 +607,44 @@ body.modal-open-gp { overflow: hidden; }
     font-size: 1.35rem; font-weight: 800;
 }
 
+/* ---------- Team Reports ---------- */
+.badge-rank {
+    width: 28px; height: 28px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 50%;
+    font-weight: 700; font-size: 0.78rem;
+}
+.badge-rank.rank-1 { background: rgba(243, 156, 18, 0.18); color: var(--orange); }
+.badge-rank.rank-2 { background: rgba(154, 167, 189, 0.18); color: var(--text-1); }
+.badge-rank.rank-3 { background: rgba(205, 127, 50, 0.2); color: var(--orange); }
+
+.insights-list { padding: 8px 4px; }
+.insight-item {
+    display: flex; align-items: flex-start; gap: 14px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--glass-border);
+}
+.insight-item:last-child { border-bottom: none; }
+.insight-icon {
+    width: 38px; height: 38px; flex: 0 0 38px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 12px;
+    background: rgba(124, 92, 255, 0.12);
+    border: 1px solid rgba(124, 92, 255, 0.3);
+    font-size: 1.05rem;
+}
+.insight-body { flex: 1 1 auto; min-width: 0; }
+.insight-title {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin-bottom: 2px;
+}
+.insight-detail { font-size: 0.85rem; }
+
+.analysis-text {
+    font-size: 0.95rem; line-height: 1.6;
+    color: var(--text-1);
+}
+
 /* ---------- Responsive ---------- */
 @media (max-width: 992px) {
     .sidebar { position: fixed; transform: translateX(-100%); }

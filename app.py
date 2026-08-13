@@ -12,6 +12,7 @@ import os
 
 from flask import (
     Flask,
+    Response,
     flash,
     jsonify,
     redirect,
@@ -171,6 +172,30 @@ def _load_report() -> tuple[dict | None, str | None]:
 
         get_logger("app").exception("Unexpected error while building team report: %s", exc)
         return None, "Unexpected error while loading GitHub data."
+
+
+def _load_report_view() -> tuple[dict | None, str | None]:
+    """
+    Build the presentation-ready Team Reports view for the selected range.
+
+    Uses the same `_load_report` source as the dashboard, then shapes it
+    with `reports.build_view` and attaches the AI / rule-based analysis.
+    Returns (view, error) - `error` is None on success.
+    """
+    from utils.reports import build_ai_summary, build_view, resolve_range
+
+    report, error = _load_report()
+    if error or not report:
+        return None, error or "No repository selected. Pick a repository from the selector in the top bar."
+
+    rng = resolve_range(
+        period=(request.args.get("period") or "30d"),
+        from_str=(request.args.get("from") or ""),
+        to_str=(request.args.get("to") or ""),
+    )
+    view = build_view(report, rng["since"], rng["until"], rng["label"], rng["period"])
+    view["ai"] = build_ai_summary(view, rng["label"])
+    return view, None
 
 
 # ======================================================================
@@ -420,20 +445,70 @@ def register_routes(app: Flask) -> None:
             selected_repo=_repo_full_name(),
         )
 
-    # --- Standalone pages ------------------------------------------------
-    # Team Reports / Code Review / Notifications / Settings are clean
-    # "Coming Soon" placeholders - no fake data, just a clear status card.
-
+    # --- Team Reports (real page) ----------------------------------------
     @app.route("/reports")
     @login_required
     def reports():
+        """Full team performance report with range selection and exports."""
+        view, error = _load_report_view()
+
+        range_presets = [
+            ("today", "Today"),
+            ("7d", "Last 7 Days"),
+            ("30d", "Last 30 Days"),
+            ("month", "This Month"),
+            ("custom", "Custom Range"),
+        ]
+        range_query = {
+            k: v
+            for k, v in request.args.items()
+            if k in ("period", "from", "to") and v
+        }
+
         return render_template(
-            "coming_soon.html",
-            page_title="Team Reports",
-            icon="▤",
-            description="Exportable team performance and engagement reports will land here soon.",
+            "reports.html",
+            view=view,
+            error=error,
+            repo_name=_repo_full_name(),
+            range_presets=range_presets,
+            range_query=range_query,
+            from_str=(request.args.get("from") or ""),
+            to_str=(request.args.get("to") or ""),
             selected_repo=_repo_full_name(),
         )
+
+    @app.route("/reports/export/<fmt>")
+    @login_required
+    def reports_export(fmt):
+        """Download the current report as CSV or PDF."""
+        view, error = _load_report_view()
+        if error or not view:
+            flash(error or "No report available to export.", "warning")
+            return redirect(url_for("reports"))
+
+        filename_base = "gitpulse-team-report"
+
+        if fmt == "csv":
+            from utils.reports import to_csv
+
+            payload = to_csv(view).encode("utf-8-sig")
+            return Response(
+                payload,
+                mimetype="text/csv",
+                headers={"Content-Disposition": f'attachment; filename="{filename_base}.csv"'},
+            )
+
+        if fmt == "pdf":
+            from utils.reports import to_pdf
+
+            payload = to_pdf(view)
+            return Response(
+                payload,
+                mimetype="application/pdf",
+                headers={"Content-Disposition": f'attachment; filename="{filename_base}.pdf"'},
+            )
+
+        return jsonify({"error": f"Unsupported export format: {fmt}"}), 404
 
     @app.route("/code-review")
     @login_required
