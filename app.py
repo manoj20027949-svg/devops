@@ -858,6 +858,54 @@ def register_api_routes(app: Flask) -> None:
             return jsonify({"error": error}), 400
         return jsonify({"issues": report["issues"]})
 
+    @app.route("/api/issues/list")
+    @login_required
+    def api_issues_list():
+        """
+        Return the selected repository's real issues (pull requests
+        excluded) fetched live from GitHub, shaped for the Issues page.
+
+        Also attaches each issue's real AI status from the local store so
+        the AI column shows 'Not analyzed' or the actual saved severity
+        instead of invented results.
+        """
+        owner, repo = _current_repo()
+        if not owner or not repo:
+            return jsonify({"error": "No repository selected."}), 400
+        api = get_api()
+        try:
+            issues = api.list_issues(owner, repo, state="all")
+        except GitHubError as exc:
+            return jsonify({"error": exc.message}), 400
+        except Exception as exc:  # noqa: BLE001 - never leak stack traces
+            app.logger.exception("Failed to list issues for %s/%s: %s", owner, repo, exc)
+            return jsonify({"error": "Unable to load issues from GitHub."}), 500
+
+        store = app.extensions["store"]
+        for issue in issues:
+            analysis = store.find_analysis("issue", f"#{issue['number']}")
+            if analysis and analysis.get("result"):
+                result = analysis["result"]
+                issue["ai"] = {
+                    "analyzed": True,
+                    "severity": result.get("severity", ""),
+                    "engine": result.get("engine", "rule-based"),
+                }
+            else:
+                issue["ai"] = {"analyzed": False}
+
+        total = len(issues)
+        open_count = sum(1 for i in issues if i.get("state") == "open")
+        return jsonify(
+            {
+                "issues": issues,
+                "total": total,
+                "open": open_count,
+                "closed": total - open_count,
+                "repo": f"{owner}/{repo}",
+            }
+        )
+
     @app.route("/api/repository")
     @login_required
     def api_repository():
@@ -957,6 +1005,11 @@ def register_api_routes(app: Flask) -> None:
             detail = api.build_issue_detail(owner, repo, number)
         except GitHubError as exc:
             return jsonify({"error": exc.message}), 400
+        except Exception as exc:  # noqa: BLE001
+            app.logger.exception("Failed to load issue #%s: %s", number, exc)
+            return jsonify({"error": "Unable to load issue details from GitHub."}), 500
+        analysis = app.extensions["store"].find_analysis("issue", f"#{number}")
+        detail["ai"] = analysis.get("result") if analysis and analysis.get("result") else None
         return jsonify(detail)
 
     @app.route("/api/refresh", methods=["POST"])

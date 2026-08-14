@@ -216,47 +216,34 @@
         alert(title + "\n\n" + problem + (detail ? "\n\n" + detail : "") + (suggestions ? "\n\n" + suggestions : ""));
     }
 
-    // Analyze a pull request
-    document.querySelectorAll(".ai-pr-btn").forEach(function (btn) {
-        btn.addEventListener("click", function () {
-            var number = btn.dataset.pr;
-            btn.disabled = true;
-            btn.textContent = "Analyzing…";
-            postJSON("/api/ai/analyze-pr", { number: number }).then(function (res) {
-                btn.disabled = false;
-                btn.textContent = "Analyze";
-                if (res.ok) {
-                    showResult("AI Analysis · PR #" + number, res.payload);
-                } else {
-                    alert("Analysis failed: " + (res.payload.error || "unknown error"));
+    // Analyze a pull request or an issue. Uses event delegation so the
+    // buttons keep working after the issues table is re-rendered by the
+    // client-side Issues view.
+    document.addEventListener("click", function (event) {
+        var btn = event.target.closest(".ai-pr-btn, .ai-issue-btn");
+        if (!btn) return;
+        var isPr = btn.classList.contains("ai-pr-btn");
+        var number = isPr ? btn.dataset.pr : btn.dataset.issue;
+        if (!number) return;
+        var endpoint = isPr ? "/api/ai/analyze-pr" : "/api/ai/analyze-issue";
+        var label = isPr ? "PR" : "Issue";
+        btn.disabled = true;
+        btn.textContent = "Analyzing…";
+        postJSON(endpoint, { number: number }).then(function (res) {
+            btn.disabled = false;
+            btn.textContent = "Analyze";
+            if (res.ok) {
+                showResult("AI Analysis · " + label + " #" + number, res.payload);
+                if (typeof window.__refreshIssues === "function") {
+                    window.__refreshIssues();
                 }
-            }).catch(function () {
-                btn.disabled = false;
-                btn.textContent = "Analyze";
-                alert("Network error while analyzing PR.");
-            });
-        });
-    });
-
-    // Analyze an issue
-    document.querySelectorAll(".ai-issue-btn").forEach(function (btn) {
-        btn.addEventListener("click", function () {
-            var number = btn.dataset.issue;
-            btn.disabled = true;
-            btn.textContent = "Analyzing…";
-            postJSON("/api/ai/analyze-issue", { number: number }).then(function (res) {
-                btn.disabled = false;
-                btn.textContent = "Analyze";
-                if (res.ok) {
-                    showResult("AI Analysis · Issue #" + number, res.payload);
-                } else {
-                    alert("Analysis failed: " + (res.payload.error || "unknown error"));
-                }
-            }).catch(function () {
-                btn.disabled = false;
-                btn.textContent = "Analyze";
-                alert("Network error while analyzing issue.");
-            });
+            } else {
+                alert("Analysis failed: " + (res.payload.error || "unknown error"));
+            }
+        }).catch(function () {
+            btn.disabled = false;
+            btn.textContent = "Analyze";
+            alert("Network error while analyzing " + label.toLowerCase() + ".");
         });
     });
 })();

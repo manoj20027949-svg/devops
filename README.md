@@ -172,23 +172,12 @@ Token stored in signed session cookie
 Repository selection (top bar) ──► /api/github/repos (this account's repos)
    │                                 └─ POST /api/github/select-repo → stored in session
    ▼
-<<<<<<< HEAD
 Dashboard (/dashboard) ──loads──► GitHubAPI.build_team_report(selected repo)
                                       ├─ contributors ─┐
                                       ├─ commits 90d   ├──► member metrics + activity score
                                       ├─ PRs (open/closed) ┘
                                       ├─ issues
                                       └─ languages
-=======
-Dashboard (/dashboard) ──loads──► GitHubAPI.build_team_report()
-                                       ├─ collaborators ──────────────┐
-                                       ├─ team members  ──────────────┼──► member metrics + activity score
-                                       ├─ repo owner    ──────────────┘
-                                       ├─ commits 90d   (all-time total)
-                                       ├─ open PRs
-                                       ├─ open issues
-                                       └─ languages
->>>>>>> f14184d (Update GitPulse team activity dashboard)
    │
    ▼
 AI Suggestions ──► generate_suggestions(members)

@@ -279,76 +279,278 @@
             });
     }
 
-    // ---------- Issues: filter + detail modal ----------
+    // ---------- Issues: fetch, filter, paginate + inline detail ----------
     var issueSearch = document.getElementById("issueSearch");
     var issueState = document.getElementById("issueState");
     var issueAuthor = document.getElementById("issueAuthor");
     var issuesBody = document.getElementById("issuesBody");
     var issueCount = document.getElementById("issueCount");
+    var issueFilteredCount = document.getElementById("issueFilteredCount");
+    var issuesPagination = document.getElementById("issuesPagination");
+    var issuesPrev = document.getElementById("issuesPrev");
+    var issuesNext = document.getElementById("issuesNext");
+    var issuesPageInfo = document.getElementById("issuesPageInfo");
+    var issuesListView = document.getElementById("issuesListView");
+    var issueDetailView = document.getElementById("issueDetailView");
+    var issueDetailBody = document.getElementById("issueDetailBody");
+    var issueOpenGithub = document.getElementById("issueOpenGithub");
+    var issueBackBtn = document.getElementById("issueBackBtn");
 
-    function applyIssueFilters() {
-        if (!issuesBody) return;
+    var issuesState = { data: [], page: 1, perPage: 25, loading: false, error: false };
+
+    function issueLabelStyle(color) {
+        var hex = String(color || "6e7781").replace(/^#/, "");
+        if (!/^[0-9a-fA-F]{6}$/.test(hex)) hex = "6e7781";
+        var r = parseInt(hex.slice(0, 2), 16);
+        var g = parseInt(hex.slice(2, 4), 16);
+        var b = parseInt(hex.slice(4, 6), 16);
+        var luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+        var fg = luminance > 0.6 ? "#1c2333" : "#f2f5fa";
+        return "background:rgba(" + r + "," + g + "," + b + ",0.28);color:" + fg + ";border-color:rgba(" + r + "," + g + "," + b + ",0.55);";
+    }
+
+    function issueDate(value) {
+        return (value || "").slice(0, 10) || "—";
+    }
+
+    function issueSeverityClass(severity) {
+        var s = String(severity || "").toLowerCase();
+        if (s === "critical") return "sev-critical";
+        if (s === "high") return "sev-high";
+        if (s === "low") return "sev-low";
+        return "sev-medium";
+    }
+
+    function issueRowHtml(i) {
+        var stateBadge = i.state === "open"
+            ? "<span class='badge badge-status st-open'>Open</span>"
+            : "<span class='badge badge-status st-closed'>Closed</span>";
+        var labels = (i.labels || []).map(function (l) {
+            return "<span class='issue-label' style='" + issueLabelStyle(l.color) + "'>" + esc(l.name) + "</span>";
+        }).join(" ");
+        var assignees = (i.assignees && i.assignees.length)
+            ? i.assignees.map(function (a) { return "@" + esc(a); }).join(", ")
+            : "<span class='muted'>Unassigned</span>";
+        var aiCell;
+        if (i.ai && i.ai.analyzed) {
+            aiCell = "<span class='badge badge-glass badge-sev " + issueSeverityClass(i.ai.severity) + "'>" + esc(i.ai.severity || "Analyzed") + "</span>";
+        } else {
+            aiCell = "<button class='btn btn-pulse btn-sm ai-issue-btn' data-issue='" + i.number + "'>Analyze</button>";
+        }
+        return "<tr class='hover-row issue-row' data-issue='" + i.number + "' title='Click to view issue details'>" +
+            "<td><a href='" + esc(i.html_url || "#") + "' target='_blank' rel='noopener'>#" + i.number + "</a></td>" +
+            "<td class='issue-title'>" + esc(i.title) + "</td>" +
+            "<td><strong>@" + esc(i.author || "unknown") + "</strong></td>" +
+            "<td>" + (labels || "<span class='muted'>—</span>") + "</td>" +
+            "<td>" + stateBadge + "</td>" +
+            "<td>" + assignees + "</td>" +
+            "<td class='muted'>" + issueDate(i.created_at) + "</td>" +
+            "<td class='text-center'>" + aiCell + "</td>" +
+            "</tr>";
+    }
+
+    function getFilteredIssues() {
         var query = (issueSearch && issueSearch.value.trim().toLowerCase()) || "";
         var state = (issueState && issueState.value) || "";
         var author = (issueAuthor && issueAuthor.value) || "";
-        var visible = 0;
-        issuesBody.querySelectorAll(".issue-row").forEach(function (row) {
-            var show = true;
-            if (state && row.dataset.state !== state) show = false;
-            if (author && row.dataset.author !== author) show = false;
-            if (show && query && row.dataset.search.indexOf(query) === -1) show = false;
-            row.style.display = show ? "" : "none";
-            if (show) visible += 1;
+        return issuesState.data.filter(function (i) {
+            if (state && i.state !== state) return false;
+            if (author && i.author !== author) return false;
+            if (query) {
+                var hay = ((i.title || "") + " " + (i.body || "") + " #" + i.number).toLowerCase();
+                if (hay.indexOf(query) === -1) return false;
+            }
+            return true;
         });
-        if (issueCount) issueCount.textContent = String(visible);
     }
 
-    if (issueSearch) issueSearch.addEventListener("input", applyIssueFilters);
-    if (issueState) issueState.addEventListener("change", applyIssueFilters);
-    if (issueAuthor) issueAuthor.addEventListener("change", applyIssueFilters);
+    function renderIssues() {
+        if (!issuesBody) return;
+        if (issuesState.loading) {
+            issuesBody.innerHTML = "<tr><td colspan='8' class='text-center py-4'><div class='loading-spinner'></div><div class='muted small mt-2'>Loading issues…</div></td></tr>";
+        } else if (issuesState.error) {
+            issuesBody.innerHTML = "<tr><td colspan='8' class='text-center py-4'><p class='muted mb-2'>Unable to load issues from GitHub.</p><button type='button' class='btn btn-pulse btn-sm' id='issuesRetryBtn'>Retry</button></td></tr>";
+        } else {
+            var filtered = getFilteredIssues();
+            var total = filtered.length;
+            var pages = Math.max(1, Math.ceil(total / issuesState.perPage));
+            if (issuesState.page > pages) issuesState.page = pages;
+            var start = (issuesState.page - 1) * issuesState.perPage;
+            var slice = filtered.slice(start, start + issuesState.perPage);
+            if (total === 0) {
+                var msg = issuesState.data.length === 0
+                    ? "No issues have been created in this repository yet."
+                    : "No issues match your current filters.";
+                issuesBody.innerHTML = "<tr><td colspan='8' class='muted text-center py-4'>" + esc(msg) + "</td></tr>";
+            } else {
+                issuesBody.innerHTML = slice.map(issueRowHtml).join("");
+            }
+            if (issuesPagination) issuesPagination.hidden = total === 0 || total <= issuesState.perPage;
+            if (issuesPageInfo) issuesPageInfo.textContent = "Page " + issuesState.page + " of " + pages;
+            if (issuesPrev) issuesPrev.disabled = issuesState.page <= 1;
+            if (issuesNext) issuesNext.disabled = issuesState.page >= pages;
+        }
+        if (issueCount) issueCount.textContent = String(issuesState.data.length);
+        if (issueFilteredCount) {
+            var totalAll = issuesState.data.length;
+            var filteredNow = getFilteredIssues().length;
+            issueFilteredCount.textContent = totalAll === 0
+                ? ""
+                : (filteredNow === totalAll
+                    ? totalAll + " issue" + (totalAll === 1 ? "" : "s")
+                    : "Showing " + filteredNow + " of " + totalAll + " issues");
+        }
+    }
+
+    function populateIssueAuthors() {
+        if (!issueAuthor) return;
+        var authors = [];
+        var seen = {};
+        issuesState.data.forEach(function (i) {
+            var a = i.author || "";
+            if (a && !seen[a]) { seen[a] = true; authors.push(a); }
+        });
+        authors.sort(function (x, y) { return x.toLowerCase() < y.toLowerCase() ? -1 : 1; });
+        issueAuthor.innerHTML = "<option value=''>All authors</option>" + authors.map(function (a) {
+            return "<option value='" + esc(a) + "'>@" + esc(a) + "</option>";
+        }).join("");
+    }
+
+    function loadIssues() {
+        if (!issuesBody) return;
+        issuesState.loading = true;
+        issuesState.error = false;
+        renderIssues();
+        fetch("/api/issues/list")
+            .then(function (resp) {
+                return resp.json().catch(function () { return null; });
+            })
+            .then(function (payload) {
+                issuesState.loading = false;
+                if (!payload || payload.error || !Array.isArray(payload.issues)) {
+                    issuesState.error = true;
+                    renderIssues();
+                    return;
+                }
+                issuesState.data = payload.issues;
+                issuesState.page = 1;
+                populateIssueAuthors();
+                renderIssues();
+            })
+            .catch(function () {
+                issuesState.loading = false;
+                issuesState.error = true;
+                renderIssues();
+            });
+    }
+
+    window.__refreshIssues = loadIssues;
+
+    if (issueSearch) {
+        issueSearch.addEventListener("input", function () {
+            window.clearTimeout(issueSearch._timer);
+            issueSearch._timer = window.setTimeout(function () {
+                issuesState.page = 1;
+                renderIssues();
+            }, 250);
+        });
+    }
+    if (issueState) issueState.addEventListener("change", function () { issuesState.page = 1; renderIssues(); });
+    if (issueAuthor) issueAuthor.addEventListener("change", function () { issuesState.page = 1; renderIssues(); });
+    if (issuesPrev) issuesPrev.addEventListener("click", function () { issuesState.page -= 1; renderIssues(); });
+    if (issuesNext) issuesNext.addEventListener("click", function () { issuesState.page += 1; renderIssues(); });
 
     if (issuesBody) {
         issuesBody.addEventListener("click", function (event) {
+            if (event.target.closest("#issuesRetryBtn")) {
+                loadIssues();
+                return;
+            }
             if (event.target.closest("a, button")) return;
             var row = event.target.closest(".issue-row");
             if (!row) return;
-            fetchIssueDetail(row.dataset.issue);
+            openIssueDetail(Number(row.dataset.issue));
         });
     }
 
-    function fetchIssueDetail(number) {
-        openModal("Issue #" + number, "https://github.com/" + window.GITPULSE_REPO + "/issues/" + number);
-        modalBody.innerHTML = '<p class="muted">Loading issue details…</p>';
+    if (issueBackBtn) {
+        issueBackBtn.addEventListener("click", function () {
+            if (issueDetailView) issueDetailView.hidden = true;
+            if (issuesListView) issuesListView.hidden = false;
+            renderIssues();
+        });
+    }
+
+    function openIssueDetail(number) {
+        if (!issueDetailView || !issuesListView || !issueDetailBody) return;
+        issuesListView.hidden = true;
+        issueDetailView.hidden = false;
+        issueDetailBody.innerHTML = "<div class='text-center py-4'><div class='loading-spinner'></div><div class='muted small mt-2'>Loading issue details…</div></div>";
         fetch("/api/issue/" + encodeURIComponent(number))
-            .then(function (resp) { return resp.json(); })
+            .then(function (resp) {
+                return resp.json().catch(function () { return null; });
+            })
             .then(function (data) {
-                if (data.error) {
-                    modalBody.innerHTML = renderError(data.error);
+                if (!data || data.error) {
+                    issueDetailBody.innerHTML = renderError((data && data.error) || "Unable to load issue details from GitHub.");
                     return;
                 }
-                var stateBadge = data.state === "open"
-                    ? "<span class='badge badge-status st-open'>Open</span>"
-                    : "<span class='badge badge-status st-closed'>Closed</span>";
-                modalTitle.textContent = "Issue #" + number + " · " + data.title;
-                var events = (data.timeline_events || []).map(function (e) {
-                    return "<li><strong>" + esc(e.event) + "</strong> by @" + esc(e.actor) + " · " + esc((e.date || "").slice(0, 10)) + "</li>";
-                }).join("");
-                modalBody.innerHTML =
-                    "<div class='gp-detail-meta'>" + stateBadge +
-                    "<span><strong>Author</strong> @" + esc(data.author) + "</span>" +
-                    "<span><strong>Created</strong> " + esc((data.created_at || "").slice(0, 10)) + "</span>" +
-                    "<span><strong>Comments</strong> " + esc(data.comments_count) + "</span>" +
-                    "</div>" +
-                    (data.body ? "<p class='find-desc'>" + esc(data.body) + "</p>" : "") +
-                    (data.labels && data.labels.length
-                        ? "<div class='mt-3'>" + data.labels.map(function (l) { return "<span class='badge badge-glass'>" + esc(l) + "</span> "; }).join("") + "</div>"
-                        : "") +
-                    (events ? "<h3 class='h6 mt-3'>Timeline</h3><ul class='gp-list'>" + events + "</ul>" : "");
+                if (issueOpenGithub) issueOpenGithub.href = data.url || ("https://github.com/" + (window.GITPULSE_REPO || "") + "/issues/" + number);
+                renderIssueDetail(data);
             })
             .catch(function () {
-                modalBody.innerHTML = renderError("Network error while loading issue details.");
+                issueDetailBody.innerHTML = renderError("Network error while loading issue details.");
             });
     }
+
+    function renderIssueDetail(data) {
+        var stateBadge = data.state === "open"
+            ? "<span class='badge badge-status st-open'>Open</span>"
+            : "<span class='badge badge-status st-closed'>Closed</span>";
+        var labels = (data.labels || []).map(function (l) {
+            var name = typeof l === "string" ? l : (l.name || "");
+            var color = typeof l === "string" ? "6e7781" : (l.color || "6e7781");
+            return "<span class='issue-label' style='" + issueLabelStyle(color) + "'>" + esc(name) + "</span>";
+        }).join(" ");
+        var assignees = (data.assignees && data.assignees.length)
+            ? data.assignees.map(function (a) { return "@" + esc(a); }).join(", ")
+            : "<span class='muted'>Unassigned</span>";
+        var events = (data.timeline_events || []).map(function (e) {
+            return "<li><strong>" + esc(e.event) + "</strong> by @" + esc(e.actor) + " · " + esc((e.date || "").slice(0, 10)) + "</li>";
+        }).join("");
+        var aiBlock = "";
+        if (data.ai) {
+            var sev = data.ai.severity || "";
+            aiBlock = "<div class='glass card-pulse p-3 mt-3'>" +
+                "<div class='d-flex align-items-center gap-2 flex-wrap mb-2'>" +
+                "<strong>AI Analysis</strong>" +
+                "<span class='badge badge-glass badge-sev " + issueSeverityClass(sev) + "'>" + esc(sev || "Analyzed") + "</span>" +
+                "<span class='muted small'>engine: " + esc(data.ai.engine || "rule-based") + "</span>" +
+                "</div>" +
+                (data.ai.summary ? "<p class='mb-2'><strong>Summary:</strong> " + esc(data.ai.summary) + "</p>" : "") +
+                (data.ai.root_cause ? "<p class='mb-2'><strong>Root cause:</strong> " + esc(data.ai.root_cause) + "</p>" : "") +
+                (data.ai.solution ? "<p class='mb-2'><strong>Suggested solution:</strong> " + esc(data.ai.solution) + "</p>" : "") +
+                ((data.ai.related_files || []).length ? "<p class='mb-0 muted small'><strong>Related files:</strong> " + data.ai.related_files.map(function (f) { return "<code>" + esc(f) + "</code>"; }).join(" ") + "</p>" : "") +
+                "</div>";
+        } else {
+            aiBlock = "<div class='mt-3'><p class='muted small mb-2'>This issue has not been analyzed yet.</p><button class='btn btn-pulse btn-sm ai-issue-btn' data-issue='" + data.number + "'>Run AI Analysis</button></div>";
+        }
+        issueDetailBody.innerHTML =
+            "<h2 class='h4 mb-2'>" + esc(data.title || "") + " " + stateBadge + "</h2>" +
+            "<div class='gp-detail-meta'>" +
+            "<span><strong>Author</strong> @" + esc(data.author || "unknown") + "</span>" +
+            "<span><strong>Created</strong> " + esc((data.created_at || "").slice(0, 10)) + "</span>" +
+            "<span><strong>Updated</strong> " + esc((data.updated_at || "").slice(0, 10)) + "</span>" +
+            "<span><strong>Comments</strong> " + esc(data.comments_count) + "</span>" +
+            "<span><strong>Assigned</strong> " + assignees + "</span>" +
+            "</div>" +
+            (labels ? "<div class='mt-3'>" + labels + "</div>" : "") +
+            (data.body ? "<div class='issue-detail-body mt-3'>" + esc(data.body) + "</div>" : "<p class='muted mt-3 mb-0'>No description provided.</p>") +
+            aiBlock +
+            (events ? "<h3 class='h6 mt-3'>Timeline</h3><ul class='gp-list'>" + events + "</ul>" : "");
+    }
+
+    loadIssues();
 
     // ---------- Repository health analysis ----------
     var analyzeRepoBtn = document.getElementById("analyzeRepoBtn");

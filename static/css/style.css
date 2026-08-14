@@ -305,7 +305,9 @@ html, body {
     font-size: 1.4rem;
     background: rgba(255, 255, 255, 0.08);
     border: 1px solid var(--glass-border);
+    flex-shrink: 0;
 }
+.stat-icon svg { width: 24px; height: 24px; flex-shrink: 0; }
 .ic-blue { color: var(--blue); box-shadow: 0 0 18px rgba(74, 168, 255, 0.35); }
 .ic-green { color: var(--green); box-shadow: 0 0 18px rgba(46, 204, 113, 0.35); }
 .ic-purple { color: var(--purple); box-shadow: 0 0 18px rgba(155, 108, 255, 0.35); }
@@ -375,13 +377,6 @@ html, body {
     border-radius: 999px;
     vertical-align: middle;
 }
-.webhook-status {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-}
 .badge-status {
     font-size: 0.68rem;
     font-weight: 700;
@@ -389,18 +384,11 @@ html, body {
     border-radius: 999px;
     white-space: nowrap;
 }
-.badge-ok {
-    background: rgba(46, 204, 113, 0.15);
-    color: var(--green);
-    border: 1px solid rgba(46, 204, 113, 0.5);
-}
 .badge-off {
     background: rgba(255, 255, 255, 0.08);
     color: var(--text-2);
     border: 1px solid var(--glass-border);
 }
-.feed-empty { padding: 14px 2px 6px; }
-.feed-empty .muted:first-child { font-size: 0.95rem; }
 .badge-prio { background: var(--glass-bg); border: 1px solid var(--glass-border); }
 .prio-high .badge-prio { color: var(--red); border-color: rgba(255, 82, 82, 0.5); }
 .prio-medium .badge-prio { color: var(--orange); border-color: rgba(243, 156, 18, 0.5); }
@@ -535,6 +523,35 @@ tr.sev-high td:first-child { border-left: 3px solid var(--orange); }
 .badge-status.st-open { background: rgba(74, 168, 255, 0.16); color: var(--blue); }
 .badge-status.st-closed { background: rgba(255, 82, 82, 0.16); color: var(--red); }
 .badge-status.st-merged { background: rgba(155, 108, 255, 0.18); color: var(--purple); }
+
+/* ---------- Issues page ---------- */
+.issue-title {
+    font-weight: 600;
+    color: var(--text-1);
+    max-width: 400px;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+}
+.issue-label {
+    display: inline-block;
+    padding: 2px 10px;
+    margin-right: 4px;
+    margin-bottom: 2px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+    white-space: nowrap;
+}
+.issue-detail-body {
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.6;
+}
 
 /* ---------- Clickable stat cards ---------- */
 a.stat-card-link { display: block; color: inherit; text-decoration: none; }

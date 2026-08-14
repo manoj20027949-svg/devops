@@ -808,3 +808,102 @@ def test_reports_export_pdf(client, monkeypatch):
 def test_reports_export_unknown_format_returns_404(client, monkeypatch):
     response = _get_reports(client, "/reports/export/docx", monkeypatch)
     assert response.status_code == 404
+
+
+# ======================================================================
+# Issues API (live issues for the Issues page)
+# ======================================================================
+def test_api_issues_list_returns_normalized_issues(client, monkeypatch):
+    monkeypatch.setattr(
+        GitHubAPI,
+        "list_issues",
+        lambda self, owner, repo, state="all": [
+            {
+                "number": 7,
+                "title": "Login fails",
+                "body": "Repro steps: open the app and submit an empty form.",
+                "state": "open",
+                "author": "bob",
+                "labels": [{"name": "bug", "color": "d73a4a"}],
+                "assignees": ["alice"],
+                "created_at": "2024-02-01T00:00:00Z",
+                "updated_at": "2024-02-01T00:00:00Z",
+                "closed_at": None,
+                "comments_count": 2,
+                "html_url": "https://github.com/o/r/issues/7",
+            },
+            {
+                "number": 5,
+                "title": "Typo in README",
+                "body": "s/teh/the",
+                "state": "closed",
+                "author": "alice",
+                "labels": [],
+                "assignees": [],
+                "created_at": "2024-01-10T00:00:00Z",
+                "updated_at": "2024-01-11T00:00:00Z",
+                "closed_at": "2024-01-11T00:00:00Z",
+                "comments_count": 0,
+                "html_url": "https://github.com/o/r/issues/5",
+            },
+        ],
+    )
+    with client.session_transaction() as sess:
+        sess["github_token"] = "t"
+        sess["github_user"] = "alice"
+        sess["selected_repo"] = "o/r"
+
+    response = client.get("/api/issues/list")
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["total"] == 2
+    assert payload["open"] == 1
+    assert payload["closed"] == 1
+    assert payload["repo"] == "o/r"
+    assert payload["issues"][0]["number"] == 7
+    assert payload["issues"][0]["labels"][0]["color"] == "d73a4a"
+    assert payload["issues"][0]["assignees"] == ["alice"]
+    assert payload["issues"][0]["ai"] == {"analyzed": False}
+
+
+def test_api_issues_list_requires_login(client):
+    response = client.get("/api/issues/list")
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/login")
+
+
+def test_api_issue_detail_includes_saved_analysis(client, monkeypatch):
+    monkeypatch.setattr(
+        GitHubAPI,
+        "build_issue_detail",
+        lambda self, owner, repo, number: {
+            "number": 99,
+            "title": "Login fails",
+            "state": "open",
+            "author": "bob",
+            "body": "Repro steps",
+            "url": "https://github.com/o/r/issues/99",
+            "labels": [{"name": "bug", "color": "d73a4a"}],
+            "assignees": ["alice"],
+            "comments_count": 0,
+            "comments": [],
+            "timeline_events": [],
+            "created_at": "2024-02-01T00:00:00Z",
+            "updated_at": "2024-02-01T00:00:00Z",
+        },
+    )
+    with client.session_transaction() as sess:
+        sess["github_token"] = "t"
+        sess["github_user"] = "alice"
+        sess["selected_repo"] = "o/r"
+
+    store = client.application.extensions["store"]
+    store.save_analysis("issue", "#99", {"severity": "high", "engine": "rule-based"})
+
+    response = client.get("/api/issue/99")
+    detail = response.get_json()
+
+    assert response.status_code == 200
+    assert detail["ai"]["severity"] == "high"
+    assert detail["ai"]["engine"] == "rule-based"

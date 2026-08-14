@@ -47,6 +47,10 @@ _HTTP_CACHE: dict[tuple, tuple[float, object]] = {}
 # How many recent commits get per-commit file/stat details fetched.
 COMMIT_DETAIL_LIMIT = 50
 
+# Cap on how many issues the Issues page will fetch for one repository.
+# Guards against pathological repos while still covering normal usage.
+MAX_ISSUES_PER_REPO = 1000
+
 
 def clear_http_cache() -> None:
     """Drop every cached GitHub response (used by the Refresh action)."""
@@ -583,6 +587,63 @@ class GitHubAPI:
             per_page=per_page,
         ):
             out.extend(page)
+        return out
+
+    def list_issues(
+        self,
+        owner: str,
+        repo: str,
+        state: str = "all",
+        per_page: int = 100,
+        limit: int = MAX_ISSUES_PER_REPO,
+    ) -> list[dict]:
+        """
+        Return normalized issues (pull requests excluded) from the selected
+        repository.
+
+        Paginates through the GitHub /issues endpoint up to `limit` items so
+        the Issues page works for large repositories without loading an
+        unbounded number of records into the browser. Each issue is shaped
+        into the clean structure the Issues page renders (labels keep their
+        GitHub colors so badges can stay readable on the dark theme).
+        """
+        out: list[dict] = []
+        for page in self._iter_pages(
+            f"/repos/{owner}/{repo}/issues",
+            params={"state": state},
+            per_page=per_page,
+        ):
+            for item in page:
+                if item.get("pull_request"):
+                    continue
+                out.append(
+                    {
+                        "number": item.get("number", 0),
+                        "title": item.get("title", ""),
+                        "body": item.get("body") or "",
+                        "state": item.get("state", ""),
+                        "author": (item.get("user") or {}).get("login", ""),
+                        "author_avatar": (item.get("user") or {}).get("avatar_url", ""),
+                        "labels": [
+                            {
+                                "name": label.get("name", ""),
+                                "color": (label.get("color") or "6e7781"),
+                            }
+                            for label in item.get("labels") or []
+                        ],
+                        "assignees": [
+                            (assignee or {}).get("login", "")
+                            for assignee in item.get("assignees") or []
+                        ],
+                        "created_at": item.get("created_at", ""),
+                        "updated_at": item.get("updated_at", ""),
+                        "closed_at": item.get("closed_at"),
+                        "comments_count": item.get("comments", 0),
+                        "html_url": item.get("html_url", ""),
+                    }
+                )
+                if len(out) >= limit:
+                    return out
         return out
 
     def get_last_activity(
@@ -1813,7 +1874,17 @@ class GitHubAPI:
             "closed_at": issue.get("closed_at"),
             "body": issue.get("body") or "",
             "url": issue.get("html_url", ""),
-            "labels": [l.get("name") for l in issue.get("labels") or []],
+            "labels": [
+                {
+                    "name": label.get("name", ""),
+                    "color": (label.get("color") or "6e7781"),
+                }
+                for label in issue.get("labels") or []
+            ],
+            "assignees": [
+                (assignee or {}).get("login", "")
+                for assignee in issue.get("assignees") or []
+            ],
             "comments_count": len(comments),
             "comments": [
                 {

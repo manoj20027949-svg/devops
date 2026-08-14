@@ -112,6 +112,32 @@ class Store:
         rows = self._query("ai_analysis", "ORDER BY id DESC", limit=limit)
         return [{**dict(r), "result": json.loads(r["result_json"])} for r in rows]
 
+    def find_analysis(
+        self, kind: str, target: str
+    ) -> Optional[dict[str, Any]]:
+        """
+        Return the most recent saved analysis matching `kind` + `target`
+        (for example kind="issue", target="#12"), or None when no analysis
+        has been saved yet. Used to show real AI status on the Issues page.
+        """
+        if not self._enabled:
+            return None
+        try:
+            with self._lock:
+                cur = self._connection.execute(
+                    "SELECT * FROM ai_analysis "
+                    "WHERE kind = ? AND target = ? "
+                    "ORDER BY id DESC LIMIT 1",
+                    (kind, target),
+                )
+                row = cur.fetchone()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not read analysis %s/%s: %s", kind, target, exc)
+            return None
+        if row is None:
+            return None
+        return {**dict(row), "result": json.loads(row["result_json"])}
+
     # ------------------------------------------------------------------
     # Fix attempts
     # ------------------------------------------------------------------

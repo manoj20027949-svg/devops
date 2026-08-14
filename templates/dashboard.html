@@ -31,9 +31,11 @@
     <!-- Stat cards -->
     <div class="row g-4 stat-row">
         <div class="col-6 col-xl-3">
-            <a href="{{ url_for('team_members') }}" class="stat-card-link" title="View all Team Members">
+            <a href="#" class="stat-card-link" data-goto="tab-members" title="View Team Members">
                 <div class="glass card-pulse stat-card">
-                    <div class="stat-icon ic-blue">👥</div>
+                    <div class="stat-icon ic-blue">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                    </div>
                     <div class="stat-body">
                         <span class="stat-value">{{ report.overview.members }}</span>
                         <span class="stat-label">Total Members</span>
@@ -42,9 +44,11 @@
             </a>
         </div>
         <div class="col-6 col-xl-3">
-            <a href="{{ url_for('team_members', status='active') }}" class="stat-card-link" title="View active Team Members">
+            <a href="#" class="stat-card-link" data-goto="tab-members" title="View Team Members">
                 <div class="glass card-pulse stat-card">
-                    <div class="stat-icon ic-green">⚡</div>
+                    <div class="stat-icon ic-green">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="16 11 18 13 22 9"/></svg>
+                    </div>
                     <div class="stat-body">
                         <span class="stat-value">{{ report.overview.active_members|default(0) }}</span>
                         <span class="stat-label">Active Members</span>
@@ -53,9 +57,11 @@
             </a>
         </div>
         <div class="col-6 col-xl-3">
-            <a href="{{ url_for('team_members', status='inactive') }}" class="stat-card-link" title="View inactive Team Members">
+            <a href="#" class="stat-card-link" data-goto="tab-members" title="View Team Members">
                 <div class="glass card-pulse stat-card">
-                    <div class="stat-icon ic-orange">◎</div>
+                    <div class="stat-icon ic-orange">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="17" y1="8" x2="22" y2="13"/><line x1="22" y1="8" x2="17" y2="13"/></svg>
+                    </div>
                     <div class="stat-body">
                         <span class="stat-value">{{ report.overview.inactive_members|default(0) }}</span>
                         <span class="stat-label">Inactive Members</span>
@@ -66,7 +72,9 @@
         <div class="col-6 col-xl-3">
             <a href="#" class="stat-card-link" data-goto="tab-commits" title="View Commits">
                 <div class="glass card-pulse stat-card">
-                    <div class="stat-icon ic-purple">✓</div>
+                    <div class="stat-icon ic-purple">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><line x1="12" y1="3" x2="12" y2="8"/><line x1="12" y1="16" x2="12" y2="21"/></svg>
+                    </div>
                     <div class="stat-body">
                         <span class="stat-value">{{ report.overview.total_commits }}</span>
                         <span class="stat-label">Total Commits ({{ activity_window }}d)</span>
@@ -77,7 +85,9 @@
         <div class="col-6 col-xl-3">
             <a href="#" class="stat-card-link" data-goto="tab-prs" title="View Pull Requests">
                 <div class="glass card-pulse stat-card">
-                    <div class="stat-icon ic-blue">⇄</div>
+                    <div class="stat-icon ic-blue">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/></svg>
+                    </div>
                     <div class="stat-body">
                         <span class="stat-value">{{ report.overview.open_prs }}</span>
                         <span class="stat-label">Open Pull Requests</span>
@@ -88,7 +98,9 @@
         <div class="col-6 col-xl-3">
             <a href="#" class="stat-card-link" data-goto="tab-prs" title="View Pull Requests">
                 <div class="glass card-pulse stat-card">
-                    <div class="stat-icon ic-green">⇃</div>
+                    <div class="stat-icon ic-green">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg>
+                    </div>
                     <div class="stat-body">
                         <span class="stat-value">{{ report.overview.merged_prs|default(0) }}</span>
                         <span class="stat-label">Merged Pull Requests</span>
@@ -99,7 +111,9 @@
         <div class="col-6 col-xl-3">
             <a href="#" class="stat-card-link" data-goto="tab-issues" title="View Issues">
                 <div class="glass card-pulse stat-card">
-                    <div class="stat-icon ic-orange">◎</div>
+                    <div class="stat-icon ic-orange">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+                    </div>
                     <div class="stat-body">
                         <span class="stat-value">{{ report.overview.open_issues }}</span>
                         <span class="stat-label">Open Issues</span>
@@ -110,7 +124,9 @@
         <div class="col-6 col-xl-3">
             <a href="#" class="stat-card-link" data-goto="tab-ai-analysis" title="View AI Analysis">
                 <div class="glass card-pulse stat-card">
-                    <div class="stat-icon ic-red">✦</div>
+                    <div class="stat-icon ic-red">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+                    </div>
                     <div class="stat-body">
                         <span class="stat-value">{{ ai_errors_count }}</span>
                         <span class="stat-label">AI Detected Errors</span>
@@ -121,7 +137,9 @@
         <div class="col-6 col-xl-3">
             <a href="#" class="stat-card-link" data-goto="tab-ai-fixes" title="View AI Fixes">
                 <div class="glass card-pulse stat-card">
-                    <div class="stat-icon ic-green">✓</div>
+                    <div class="stat-icon ic-green">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="m10 13.2 1.7 1.6 3.5-3.7"/></svg>
+                    </div>
                     <div class="stat-body">
                         <span class="stat-value">{{ ai_fixed_count }}</span>
                         <span class="stat-label">AI Fixed Issues (PRs)</span>
@@ -132,7 +150,9 @@
         <div class="col-6 col-xl-3">
             <a href="#" class="stat-card-link" data-goto="tab-prs" title="View Pull Requests">
                 <div class="glass card-pulse stat-card">
-                    <div class="stat-icon ic-purple">⇃</div>
+                    <div class="stat-icon ic-purple">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/></svg>
+                    </div>
                     <div class="stat-body">
                         <span class="stat-value">{{ report.overview.total_prs|default(0) }}</span>
                         <span class="stat-label">Total Pull Requests</span>
@@ -143,7 +163,9 @@
         <div class="col-6 col-xl-3">
             <a href="#" class="stat-card-link" data-goto="tab-members" title="View Team Members">
                 <div class="glass card-pulse stat-card">
-                    <div class="stat-icon ic-blue">⑂</div>
+                    <div class="stat-icon ic-purple">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                    </div>
                     <div class="stat-body">
                         <span class="stat-value">{{ report.overview.contributors_count|default(0) }}</span>
                         <span class="stat-label">Contributors</span>
@@ -153,7 +175,9 @@
         </div>
         <div class="col-6 col-xl-3">
             <div class="glass card-pulse stat-card">
-                <div class="stat-icon ic-green">↕</div>
+                <div class="stat-icon ic-green">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                </div>
                 <div class="stat-body">
                     <span class="stat-value">+{{ report.overview.total_additions|default(0) }} / −{{ report.overview.total_deletions|default(0) }}</span>
                     <span class="stat-label">Lines Changed ({{ activity_window }}d)</span>
@@ -297,7 +321,7 @@
 ================================================================ -->
 <section class="tab-pane" id="tab-activity">
     <div class="row g-4">
-        <div class="col-lg-7">
+        <div class="col-lg-12">
             <div class="glass card-pulse h-100">
                 <div class="card-header-row">
                     <h2>Recent Activity</h2>
@@ -349,44 +373,6 @@
                     </div>
                     {% else %}
                     <p class="muted p-3 mb-0">No activity in the selected period.</p>
-                    {% endfor %}
-                </div>
-            </div>
-        </div>
-        <div class="col-lg-5">
-            <div class="glass card-pulse h-100">
-                <div class="card-header-row">
-<<<<<<< HEAD
-                    <h2>Webhook Events</h2>
-                    <span class="badge badge-glass">{{ recent_activity|length }} events</span>
-=======
-                    <h2>Recent Activity (Webhooks)</h2>
-                    <div class="webhook-status">
-                        {% if webhook_configured %}
-                        <span class="badge badge-status badge-ok" title="GitHub webhooks are delivering events to this instance.">Webhook Connected</span>
-                        {% else %}
-                        <span class="badge badge-status badge-off" title="Webhooks are optional — activity is still fetched from the GitHub API.">Webhook Not Configured (Optional)</span>
-                        {% endif %}
-                        <span class="badge badge-glass">{{ recent_activity|length }} events</span>
-                    </div>
->>>>>>> 074071b (Fix sidebar vertical scrolling)
-                </div>
-                <div class="feed-list">
-                    {% for ev in recent_activity %}
-                    <div class="feed-item">
-                        <div class="feed-icon ic-green">⇄</div>
-                        <div class="feed-body">
-                            <div class="feed-title">{{ ev.summary|default(ev.event) }}</div>
-                            <div class="feed-meta muted">
-                                {{ ev.event }}{{ ' · ' ~ ev.action if ev.action }} · {{ (ev.created_at or '')[:19].replace('T', ' ') }}
-                            </div>
-                        </div>
-                    </div>
-                    {% else %}
-                    <div class="feed-empty">
-                        <p class="muted mb-1">No webhook events received yet.</p>
-                        <p class="muted small mb-0">Activity is still fetched from the GitHub API on every load, so webhooks are optional.</p>
-                    </div>
                     {% endfor %}
                 </div>
             </div>
@@ -549,7 +535,7 @@
     <div class="glass card-pulse">
         <div class="card-header-row">
             <h2>Issues</h2>
-            <span class="badge badge-glass"><span id="issueCount">{{ report.issues|default([])|length }}</span></span>
+            <span class="badge badge-glass">Total: <span id="issueCount">{{ report.issues|default([])|length }}</span></span>
         </div>
         <div class="p-3 pb-1 border-bottom border-light">
             <div class="row g-2">
@@ -573,44 +559,67 @@
                 </div>
             </div>
         </div>
-        <div class="table-responsive">
-            <table class="table table-pulse align-middle">
-                <thead>
-                    <tr>
-                        <th>#</th>
-                        <th>Title</th>
-                        <th>Author</th>
-                        <th>Labels</th>
-                        <th>Status</th>
-                        <th>Assigned</th>
-                        <th>Created</th>
-                        <th class="text-center">AI</th>
-                    </tr>
-                </thead>
-                <tbody id="issuesBody">
-                    {% for i in report.issues|default([]) %}
-                    <tr class="hover-row issue-row" data-issue="{{ i.number }}" data-author="{{ i.author|default('') }}" data-state="{{ i.state }}" data-search="{{ (i.title|default('') ~ ' #' ~ i.number)|lower }}" title="Click to view issue details">
-                        <td><a href="{{ i.html_url }}" target="_blank" rel="noopener">#{{ i.number }}</a></td>
-                        <td class="find-desc">{{ i.title }}</td>
-                        <td><strong>@{{ i.author }}</strong></td>
-                        <td>
-                            {% for label in i.labels|default([]) %}<span class="badge badge-glass">{{ label }}</span> {% endfor %}
-                        </td>
-                        <td>
-                            {% if i.state == 'open' %}<span class="badge badge-status st-open">Open</span>
-                            {% else %}<span class="badge badge-status st-closed">Closed</span>{% endif %}
-                        </td>
-                        <td class="muted">{{ i.assignees|default([])|join(', ') or '—' }}</td>
-                        <td class="muted">{{ (i.created_at or '')[:10] }}</td>
-                        <td class="text-center">
-                            <button class="btn btn-pulse btn-sm ai-issue-btn" data-issue="{{ i.number }}">Analyze</button>
-                        </td>
-                    </tr>
-                    {% else %}
-                    <tr><td colspan="8" class="muted text-center py-4" id="issuesEmpty">No issues found.</td></tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+        <div class="px-3 py-2 border-bottom border-light d-flex flex-wrap align-items-center justify-content-between gap-2">
+            <span class="muted small" id="issueFilteredCount"></span>
+            <span class="muted small d-none d-md-inline">Click an issue row to view its full details.</span>
+        </div>
+
+        <div id="issuesListView">
+            <div class="table-responsive">
+                <table class="table table-pulse align-middle">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Title</th>
+                            <th>Author</th>
+                            <th>Labels</th>
+                            <th>Status</th>
+                            <th>Assigned</th>
+                            <th>Created</th>
+                            <th class="text-center">AI</th>
+                        </tr>
+                    </thead>
+                    <tbody id="issuesBody">
+                        {% for i in report.issues|default([]) %}
+                        <tr class="hover-row issue-row" data-issue="{{ i.number }}" data-author="{{ i.author|default('') }}" data-state="{{ i.state }}" data-search="{{ (i.title|default('') ~ ' #' ~ i.number)|lower }}" title="Click to view issue details">
+                            <td><a href="{{ i.html_url }}" target="_blank" rel="noopener">#{{ i.number }}</a></td>
+                            <td class="issue-title">{{ i.title }}</td>
+                            <td><strong>@{{ i.author }}</strong></td>
+                            <td>
+                                {% for label in i.labels|default([]) %}<span class="badge badge-glass">{{ label }}</span> {% endfor %}
+                            </td>
+                            <td>
+                                {% if i.state == 'open' %}<span class="badge badge-status st-open">Open</span>
+                                {% else %}<span class="badge badge-status st-closed">Closed</span>{% endif %}
+                            </td>
+                            <td class="muted">{{ i.assignees|default([])|join(', ') or '—' }}</td>
+                            <td class="muted">{{ (i.created_at or '')[:10] }}</td>
+                            <td class="text-center">
+                                <button class="btn btn-pulse btn-sm ai-issue-btn" data-issue="{{ i.number }}">Analyze</button>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="8" class="muted text-center py-4" id="issuesEmpty">No issues found.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="px-3 py-2 border-top border-light d-flex flex-wrap align-items-center justify-content-between gap-2" id="issuesPagination" hidden>
+                <span class="muted small"></span>
+                <div class="d-flex align-items-center gap-2">
+                    <button type="button" class="btn btn-pulse btn-sm" id="issuesPrev">&larr; Prev</button>
+                    <span class="small" id="issuesPageInfo">Page 1 of 1</span>
+                    <button type="button" class="btn btn-pulse btn-sm" id="issuesNext">Next &rarr;</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="issueDetailView" class="p-3" hidden>
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+                <button type="button" class="btn btn-pulse btn-sm" id="issueBackBtn">&larr; Back to issues</button>
+                <a href="#" target="_blank" rel="noopener" class="btn btn-pulse btn-sm" id="issueOpenGithub">Open in GitHub</a>
+            </div>
+            <div id="issueDetailBody" class="find-desc"></div>
         </div>
     </div>
 </section>
