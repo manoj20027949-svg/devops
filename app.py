@@ -12,6 +12,7 @@ import os
 
 from flask import (
     Flask,
+    Response,
     flash,
     jsonify,
     redirect,
@@ -173,6 +174,30 @@ def _load_report() -> tuple[dict | None, str | None]:
         return None, "Unexpected error while loading GitHub data."
 
 
+def _load_report_view() -> tuple[dict | None, str | None]:
+    """
+    Build the presentation-ready Team Reports view for the selected range.
+
+    Uses the same `_load_report` source as the dashboard, then shapes it
+    with `reports.build_view` and attaches the AI / rule-based analysis.
+    Returns (view, error) - `error` is None on success.
+    """
+    from utils.reports import build_ai_summary, build_view, resolve_range
+
+    report, error = _load_report()
+    if error or not report:
+        return None, error or "No repository selected. Pick a repository from the selector in the top bar."
+
+    rng = resolve_range(
+        period=(request.args.get("period") or "30d"),
+        from_str=(request.args.get("from") or ""),
+        to_str=(request.args.get("to") or ""),
+    )
+    view = build_view(report, rng["since"], rng["until"], rng["label"], rng["period"])
+    view["ai"] = build_ai_summary(view, rng["label"])
+    return view, None
+
+
 # ======================================================================
 # Route definitions
 # ======================================================================
@@ -328,6 +353,7 @@ def register_routes(app: Flask) -> None:
             activity_window=settings.ACTIVITY_WINDOW_DAYS,
             ai_errors_count=ai_errors_count,
             ai_fixed_count=ai_fixed_count,
+            webhook_configured=bool(settings.GITHUB_WEBHOOK_SECRET),
         )
 
     # --- Dashboard refresh (re-fetch collaborators + activity) ------------
@@ -374,6 +400,146 @@ def register_routes(app: Flask) -> None:
             profile=profile,
             suggestions=[s.to_dict() for s in member_suggestions],
             ai_enabled=settings.anthropic_configured,
+            selected_repo=_repo_full_name(),
+        )
+
+    # --- Team Members (status-filterable) --------------------------------
+    @app.route("/team-members")
+    @login_required
+    def team_members():
+        """
+        List every team member, optionally filtered by activity status.
+
+        The filter uses the exact same `is_active` flag that the dashboard
+        uses to derive its Active/Inactive counts, so the numbers always
+        match. The flag is computed in build_team_report via
+        activity_mod.enrich_member (status == "ACTIVE").
+
+        ?status=active    -> only ACTIVE members
+        ?status=inactive  -> every non-ACTIVE member
+        no parameter      -> all members
+        """
+        report, error = _load_report()
+
+        status = (request.args.get("status") or "").strip().lower()
+        members = list((report or {}).get("members") or [])
+
+        filter_title = "All Members"
+        if status == "active":
+            members = [m for m in members if m.get("is_active")]
+            filter_title = "Active Members"
+        elif status == "inactive":
+            members = [m for m in members if not m.get("is_active")]
+            filter_title = "Inactive Members"
+        else:
+            status = ""
+
+        return render_template(
+            "team_members.html",
+            report=report,
+            members=members,
+            error=error,
+            filter_status=status,
+            filter_title=filter_title,
+            activity_window=settings.ACTIVITY_WINDOW_DAYS,
+            selected_repo=_repo_full_name(),
+        )
+
+    # --- Team Reports (real page) ----------------------------------------
+    @app.route("/reports")
+    @login_required
+    def reports():
+        """Full team performance report with range selection and exports."""
+        view, error = _load_report_view()
+
+        range_presets = [
+            ("today", "Today"),
+            ("7d", "Last 7 Days"),
+            ("30d", "Last 30 Days"),
+            ("month", "This Month"),
+            ("custom", "Custom Range"),
+        ]
+        range_query = {
+            k: v
+            for k, v in request.args.items()
+            if k in ("period", "from", "to") and v
+        }
+
+        return render_template(
+            "reports.html",
+            view=view,
+            error=error,
+            repo_name=_repo_full_name(),
+            range_presets=range_presets,
+            range_query=range_query,
+            from_str=(request.args.get("from") or ""),
+            to_str=(request.args.get("to") or ""),
+            selected_repo=_repo_full_name(),
+        )
+
+    @app.route("/reports/export/<fmt>")
+    @login_required
+    def reports_export(fmt):
+        """Download the current report as CSV or PDF."""
+        view, error = _load_report_view()
+        if error or not view:
+            flash(error or "No report available to export.", "warning")
+            return redirect(url_for("reports"))
+
+        filename_base = "gitpulse-team-report"
+
+        if fmt == "csv":
+            from utils.reports import to_csv
+
+            payload = to_csv(view).encode("utf-8-sig")
+            return Response(
+                payload,
+                mimetype="text/csv",
+                headers={"Content-Disposition": f'attachment; filename="{filename_base}.csv"'},
+            )
+
+        if fmt == "pdf":
+            from utils.reports import to_pdf
+
+            payload = to_pdf(view)
+            return Response(
+                payload,
+                mimetype="application/pdf",
+                headers={"Content-Disposition": f'attachment; filename="{filename_base}.pdf"'},
+            )
+
+        return jsonify({"error": f"Unsupported export format: {fmt}"}), 404
+
+    @app.route("/code-review")
+    @login_required
+    def code_review():
+        return render_template(
+            "coming_soon.html",
+            page_title="Code Review",
+            icon="◉",
+            description="Centralized pull-request review queues and review guidance will live here.",
+            selected_repo=_repo_full_name(),
+        )
+
+    @app.route("/notifications")
+    @login_required
+    def notifications():
+        return render_template(
+            "coming_soon.html",
+            page_title="Notifications",
+            icon="☼",
+            description="Delivery of team alerts and activity digests will be configured here.",
+            selected_repo=_repo_full_name(),
+        )
+
+    @app.route("/settings")
+    @login_required
+    def settings_page():
+        return render_template(
+            "coming_soon.html",
+            page_title="Settings",
+            icon="⚙",
+            description="Application, team and notification preferences will be managed here.",
             selected_repo=_repo_full_name(),
         )
 
@@ -692,6 +858,129 @@ def register_api_routes(app: Flask) -> None:
             return jsonify({"error": error}), 400
         return jsonify({"issues": report["issues"]})
 
+    @app.route("/api/repository")
+    @login_required
+    def api_repository():
+        """Return the currently selected repository's metadata."""
+        report, error = _report_or_error()
+        if error:
+            return jsonify({"error": error}), 400
+        return jsonify({"repo": report["repo"], "team_name": report["team_name"]})
+
+    @app.route("/api/overview")
+    @login_required
+    def api_overview():
+        """Return the dashboard overview metrics."""
+        report, error = _report_or_error()
+        if error:
+            return jsonify({"error": error}), 400
+        return jsonify(
+            {
+                "owner": report["owner"],
+                "repo": report["repo"],
+                "overview": report["overview"],
+                "languages": report["languages"],
+            }
+        )
+
+    @app.route("/api/activity")
+    @login_required
+    def api_activity():
+        """
+        Return the unified activity feed.
+
+        Query params: category (commit|pull_request|issue|member|other),
+        author, q (substring match on title/action), limit (default 50).
+        """
+        report, error = _report_or_error()
+        if error:
+            return jsonify({"error": error}), 400
+        feed = list(report.get("activity_feed") or [])
+        category = (request.args.get("category") or "").strip().lower()
+        author = (request.args.get("author") or "").strip().lower()
+        query = (request.args.get("q") or "").strip().lower()
+        try:
+            limit = max(1, min(int(request.args.get("limit") or 50), 200))
+        except (TypeError, ValueError):
+            limit = 50
+
+        if category:
+            feed = [item for item in feed if (item.get("category") or "").lower() == category]
+        if author:
+            feed = [item for item in feed if (item.get("actor") or "").lower() == author]
+        if query:
+            feed = [
+                item
+                for item in feed
+                if query in (item.get("title") or "").lower()
+                or query in (item.get("action") or "").lower()
+            ]
+        return jsonify({"activity": feed[:limit]})
+
+    @app.route("/api/commit/<sha>")
+    @login_required
+    def api_commit_detail(sha):
+        """Return a single commit's detail (files, stats, message)."""
+        owner, repo = _current_repo()
+        if not owner or not repo:
+            return jsonify({"error": "No repository selected."}), 400
+        api = get_api()
+        try:
+            detail = api.build_commit_detail(owner, repo, sha)
+        except GitHubError as exc:
+            return jsonify({"error": exc.message}), 400
+        return jsonify(detail)
+
+    @app.route("/api/pull-request/<int:number>")
+    @login_required
+    def api_pull_request_detail(number):
+        """Return a single pull request's rich detail view."""
+        owner, repo = _current_repo()
+        if not owner or not repo:
+            return jsonify({"error": "No repository selected."}), 400
+        api = get_api()
+        try:
+            detail = api.build_pr_detail(owner, repo, number)
+        except GitHubError as exc:
+            return jsonify({"error": exc.message}), 400
+        return jsonify(detail)
+
+    @app.route("/api/issue/<int:number>")
+    @login_required
+    def api_issue_detail(number):
+        """Return a single issue's rich detail view."""
+        owner, repo = _current_repo()
+        if not owner or not repo:
+            return jsonify({"error": "No repository selected."}), 400
+        api = get_api()
+        try:
+            detail = api.build_issue_detail(owner, repo, number)
+        except GitHubError as exc:
+            return jsonify({"error": exc.message}), 400
+        return jsonify(detail)
+
+    @app.route("/api/refresh", methods=["POST"])
+    @login_required
+    def api_refresh():
+        """
+        AJAX refresh: clear the in-memory GitHub HTTP cache and the cached
+        scan results, then reload the webhook activity list.
+        """
+        from utils.github_api import clear_http_cache
+
+        clear_http_cache()
+        app.extensions["scan_cache"] = {"data": None}
+        app.extensions["recent_activity"] = list(
+            app.extensions["store"].list_webhook_events(limit=20)
+        )
+        app.logger.info("API refresh requested by %s", session.get("github_user"))
+        return jsonify(
+            {
+                "ok": True,
+                "message": "GitHub data cache cleared. The next request re-fetches from GitHub.",
+            }
+        )
+
     @app.route("/api/errors")
     @login_required
     def api_errors():
@@ -810,6 +1099,32 @@ def register_api_routes(app: Flask) -> None:
             return jsonify({"error": exc.message}), 400
         app.extensions["store"].save_analysis(
             "issue", f"#{number}", result, author=session.get("github_user")
+        )
+        return jsonify(result)
+
+    @app.route("/api/ai/analyze-repo", methods=["POST"])
+    @login_required
+    def api_ai_analyze_repo():
+        """
+        Repository-level health analysis + fix recommendations.
+
+        Rule-based by default (always available). When ANTHROPIC_API_KEY is
+        configured an AI narrative is added on top. Results are saved to
+        the store for the AI Fixes tab.
+        """
+        report, error = _load_report()
+        if error:
+            return jsonify({"error": error}), 400
+        result = ai_analyzer.analyze_repository(report)
+        if settings.anthropic_configured:
+            narrative = ai_analyzer.analyze_repository_ai(report)
+            if narrative:
+                result["ai_narrative"] = narrative
+                result["engine"] = "ai"
+        app.extensions["store"].save_analysis(
+            "repo", report.get("repo") or f"{report.get('owner')}/{report.get('repo')}",
+            result,
+            author=session.get("github_user"),
         )
         return jsonify(result)
 

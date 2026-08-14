@@ -19,6 +19,7 @@ import hashlib
 import json
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from config.logging_setup import get_logger
@@ -595,4 +596,254 @@ def analyze_issue(issue: dict) -> dict:
         "related_files": _as_list("related_files"),
         "steps": _as_list("steps"),
         "engine": "ai",
+    }
+
+
+# ----------------------------------------------------------------------
+# Repository-level analysis (AI Error Detection / Fix recommendations)
+# ----------------------------------------------------------------------
+def analyze_repository(report: dict) -> dict:
+    """
+    Rule-based health analysis for the whole repository. Always available
+    (zero dependencies) and produces a uniform list of findings plus an
+    overall health score. Used by the AI Analysis and AI Fixes tabs.
+    """
+    findings: list[dict] = []
+    overview = report.get("overview") or {}
+    members = report.get("members") or []
+    pushes = report.get("pushes") or []
+    pull_requests = report.get("pull_requests") or []
+    issues = report.get("issues") or []
+
+    def add(severity, category, title, explanation, recommendation, affected=""):
+        findings.append(
+            {
+                "severity": severity,
+                "category": category,
+                "title": title,
+                "explanation": explanation,
+                "recommendation": recommendation,
+                "affected": affected,
+            }
+        )
+
+    total_members = overview.get("members", len(members)) or 0
+    inactive = overview.get("inactive_members", 0) or 0
+
+    # --- Team activity health ---
+    if total_members and inactive:
+        ratio = inactive / total_members
+        if ratio >= 0.5:
+            add(
+                "high",
+                "Team Activity",
+                f"{inactive} of {total_members} members are inactive",
+                (
+                    f"{ratio:.0%} of the team has no activity in the last "
+                    f"{settings.ACTIVITY_WINDOW_DAYS} days. Risk of knowledge loss "
+                    "and uneven workload."
+                ),
+                "Reach out to inactive members, check for blocked or unassigned work, "
+                "and balance the backlog across the team.",
+                affected="team",
+            )
+        elif ratio >= 0.25:
+            add(
+                "medium",
+                "Team Activity",
+                f"{inactive} of {total_members} members are inactive",
+                (
+                    "A notable share of the team has no commits in the analyzed window."
+                ),
+                "Verify git identity configuration and confirm those members are not blocked.",
+                affected="team",
+            )
+
+    for member in members:
+        inactive_days = member.get("last_active_days")
+        if inactive_days is not None and inactive_days > 14:
+            add(
+                "high",
+                "Team Activity",
+                f"{member.get('username')} inactive for {inactive_days} days",
+                (
+                    f"No activity from {member.get('username')} for {inactive_days} days "
+                    "while the rest of the team is committing."
+                ),
+                "Check in about blockers, PTO, or whether they need reassigned work.",
+                affected=member.get("username", ""),
+            )
+        if member.get("commits", 0) >= 5 and member.get("pr_count", 0) == 0:
+            add(
+                "low",
+                "Code Review",
+                f"{member.get('username')} commits but never opens PRs",
+                "Commits directly without pull requests, so changes bypass review.",
+                "Encourage opening early PRs so the team can review as you build.",
+                affected=member.get("username", ""),
+            )
+
+    # --- Pull request hygiene ---
+    merged = sum(1 for pr in pull_requests if pr.get("merged"))
+    closed_unmerged = sum(
+        1 for pr in pull_requests if pr.get("state") == "closed" and not pr.get("merged")
+    )
+    open_prs = sum(1 for pr in pull_requests if pr.get("state") == "open")
+    total_prs = overview.get("total_prs", len(pull_requests)) or 0
+
+    if total_prs and merged and open_prs == 0 and closed_unmerged == 0:
+        add(
+            "low",
+            "Pull Requests",
+            "All pull requests are merged",
+            "Healthy flow: every PR reviewed and merged.",
+            "Keep the review process consistent as the team grows.",
+            affected="repository",
+        )
+    elif total_prs and open_prs / total_prs >= 0.5:
+        add(
+            "medium",
+            "Pull Requests",
+            f"{open_prs} of {total_prs} pull requests are still open",
+            "Half or more of the PRs are open, which can indicate stalled reviews.",
+            "Set a review SLA and explicitly close stale PRs.",
+            affected="repository",
+        )
+
+    # --- Issue backlog ---
+    open_issues = overview.get("open_issues", 0) or 0
+    if open_issues >= 5:
+        add(
+            "medium",
+            "Issues",
+            f"{open_issues} open issues",
+            "A growing backlog of open issues with no visible triage.",
+            "Schedule triage and label issues by priority and area.",
+            affected="repository",
+        )
+
+    # --- Commit quality (from pushes detail) ---
+    large_commits = [p for p in pushes if len(p.get("files") or []) > 10]
+    if len(large_commits) > 1:
+        add(
+            "medium",
+            "Code Quality",
+            f"{len(large_commits)} oversized commits ({len(large_commits[0].get('files') or [])}+ files)",
+            "Large multi-file commits make reviews and rollbacks harder.",
+            "Encourage smaller, single-purpose commits.",
+            affected="repository",
+        )
+
+    touched = [f.get("filename", "") for p in pushes for f in (p.get("files") or [])]
+    has_code = [f for f in touched if not f.startswith(("test", "tests"))]
+    has_tests = [f for f in touched if "test" in f.lower()]
+    if has_code and not has_tests:
+        add(
+            "low",
+            "Code Quality",
+            "No test files touched in recent commits",
+            "Recent commits changed source code but no test files.",
+            "Add or update tests alongside feature work.",
+            affected="repository",
+        )
+
+    # --- Bus factor / contributor balance ---
+    contributors = report.get("contributors") or []
+    if contributors:
+        sorted_contrib = sorted(
+            contributors, key=lambda c: c.get("contributions", 0), reverse=True
+        )
+        top = sorted_contrib[0]
+        total_contrib = sum(c.get("contributions", 0) for c in sorted_contrib)
+        if total_contrib and top.get("contributions", 0) / total_contrib >= 0.7:
+            add(
+                "medium",
+                "Bus Factor",
+                f"{top.get('username')} contributes {top.get('contributions', 0)} of {total_contrib} commits",
+                "A single contributor is responsible for most of the code, creating a bus factor risk.",
+                "Pair the top contributor with teammates and rotate ownership of critical modules.",
+                affected=top.get("username", ""),
+            )
+
+    # --- Health score ---
+    severity_penalty = {"critical": 25, "high": 15, "medium": 8, "low": 3}
+    health_score = max(
+        0, 100 - sum(severity_penalty.get(f["severity"], 3) for f in findings)
+    )
+    if not findings:
+        health_score = 100
+
+    return {
+        "health_score": health_score,
+        "summary": _health_summary(health_score, len(findings)),
+        "findings": findings,
+        "engine": "rule-based",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _health_summary(score: int, finding_count: int) -> str:
+    if score >= 90:
+        return "Repository is in excellent health. Keep up the good review and commit hygiene."
+    if score >= 70:
+        return (
+            "Repository is generally healthy with a few areas worth attention "
+            f"({finding_count} finding{'s' if finding_count != 1 else ''})."
+        )
+    if score >= 45:
+        return (
+            f"Repository shows {finding_count} findings that need attention before they become problems."
+        )
+    return (
+        f"Repository health is at risk ({finding_count} findings). Prioritize the high-severity items."
+    )
+
+
+def analyze_repository_ai(report: dict) -> Optional[dict]:
+    """
+    Optional Claude-based repository narrative.
+
+    Only called when ANTHROPIC_API_KEY is configured. Returns None on any
+    failure so the rule-based analysis always stands on its own.
+    """
+    if not settings.anthropic_configured:
+        return None
+
+    overview = report.get("overview") or {}
+    members = report.get("members") or []
+    compact = [
+        {
+            "username": m.get("username"),
+            "commits": m.get("commits"),
+            "pr_count": m.get("pr_count"),
+            "issue_count": m.get("issue_count"),
+            "last_active_days": m.get("last_active_days"),
+            "activity_score": m.get("activity_score"),
+        }
+        for m in members
+    ]
+    prompt = (
+        "You are a senior engineering manager. Summarize the health of this "
+        "GitHub repository in 2-3 crisp sentences and give the top 3 "
+        "priorities for the next sprint. Be concrete and constructive.\n"
+        f"Repo: {report.get('repo') or report.get('owner')}/{report.get('repo')}\n"
+        f"Overview: {json.dumps(overview, default=str)}\n"
+        f"Members: {json.dumps(compact, default=str)}\n"
+        "Respond with a single JSON object only:\n"
+        '{"narrative": "<2-3 sentences>", "priorities": ["<priority 1>", "<priority 2>", "<priority 3>"]}'
+    )
+    payload = _ai_result_or_none(
+        prompt,
+        system=(
+            "You are a senior engineering manager coach. Only output the requested JSON object."
+        ),
+    )
+    if not payload:
+        return None
+    priorities = payload.get("priorities")
+    if not isinstance(priorities, list):
+        priorities = []
+    return {
+        "narrative": str(payload.get("narrative", "")),
+        "priorities": [str(p) for p in priorities[:3]],
     }

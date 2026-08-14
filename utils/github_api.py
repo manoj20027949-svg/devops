@@ -14,6 +14,7 @@ commits, pull requests, issues, languages and activity scoring.
 
 from __future__ import annotations
 
+import hashlib
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterator, Optional
@@ -31,6 +32,25 @@ API_BASE = "https://api.github.com"
 RATE_LIMIT_BACKOFF = 5
 # How many times a failing request is retried before giving up.
 MAX_RETRIES = 3
+
+# ----------------------------------------------------------------------
+# Process-wide response cache.
+# A fresh GitHubAPI is built on every request, so per-instance caching
+# would never survive a page load. This module-level cache keys on a
+# short hash of the token + endpoint + params and keeps the dashboard
+# from hammering the GitHub API on every load. The token value itself is
+# never stored or logged - only a hash is used as part of the key.
+# ----------------------------------------------------------------------
+HTTP_CACHE_TTL = 60  # seconds
+_HTTP_CACHE: dict[tuple, tuple[float, object]] = {}
+
+# How many recent commits get per-commit file/stat details fetched.
+COMMIT_DETAIL_LIMIT = 50
+
+
+def clear_http_cache() -> None:
+    """Drop every cached GitHub response (used by the Refresh action)."""
+    _HTTP_CACHE.clear()
 
 
 class GitHubError(Exception):
@@ -56,6 +76,14 @@ class GitHubAPI:
                 "User-Agent": "GitPulse-Team-Intelligence",
             }
         )
+        # Short, non-reversible cache key derived from the token. Only the
+        # hash is used in memory as part of a cache key; the token itself
+        # is never logged or exposed.
+        self._cache_id = hashlib.sha256(self.token.encode("utf-8")).hexdigest()[:16]
+
+    def clear_cache(self) -> None:
+        """Clear the process-wide HTTP response cache for this token."""
+        clear_http_cache()
 
     # ------------------------------------------------------------------
     # Low-level request helpers
@@ -106,6 +134,14 @@ class GitHubAPI:
         params = params or {}
         last_error: Optional[GitHubError] = None
 
+        # Read-through cache for idempotent GET requests.
+        cache_key: Optional[tuple] = None
+        if method.upper() == "GET" and json is None:
+            cache_key = (self._cache_id, path, tuple(sorted(params.items())))
+            hit = _HTTP_CACHE.get(cache_key)
+            if hit and (time.time() - hit[0]) < HTTP_CACHE_TTL:
+                return hit[1]
+
         for attempt in range(retries):
             try:
                 resp = self.session.request(
@@ -129,9 +165,14 @@ class GitHubAPI:
 
             # --- Success ---
             if resp.status_code == 204:
+                if cache_key is not None:
+                    _HTTP_CACHE[cache_key] = (time.time(), {})
                 return {}
             if 200 <= resp.status_code < 300:
-                return resp.json()
+                result = resp.json()
+                if cache_key is not None:
+                    _HTTP_CACHE[cache_key] = (time.time(), result)
+                return result
 
             # --- Client errors (4xx): report immediately, never retry ---
             if 400 <= resp.status_code < 500:
@@ -560,6 +601,94 @@ class GitHubAPI:
             out.extend(page)
         return out
 
+    def get_repo_events(
+        self,
+        owner: str,
+        repo: str,
+        since: Optional[str] = None,
+        per_page: int = 100,
+    ) -> list[dict]:
+        """
+        Return the repository's real public event stream.
+
+        GitHub's /events endpoint only returns the most recent 300 events
+        (roughly the last 90 days), so `since` is a best-effort filter on
+        top of whatever GitHub returns.
+        """
+        params: dict[str, Any] = {}
+        if since:
+            params["since"] = since
+        out: list[dict] = []
+        for page in self._iter_pages(
+            f"/repos/{owner}/{repo}/events", params=params, per_page=per_page
+        ):
+            out.extend(page)
+        return out
+
+    def get_issue(self, owner: str, repo: str, number: int) -> dict:
+        """Return a single issue by number (the /issues/<n> endpoint)."""
+        return self._request("GET", f"/repos/{owner}/{repo}/issues/{number}")
+
+    def get_pr_commits(
+        self,
+        owner: str,
+        repo: str,
+        number: int,
+        per_page: int = 100,
+    ) -> list[dict]:
+        """Return the commits included in a pull request."""
+        out: list[dict] = []
+        for page in self._iter_pages(
+            f"/repos/{owner}/{repo}/pulls/{number}/commits", per_page=per_page
+        ):
+            out.extend(page)
+        return out
+
+    def get_pr_comments(
+        self,
+        owner: str,
+        repo: str,
+        number: int,
+        per_page: int = 100,
+    ) -> list[dict]:
+        """Return the inline review comments on a pull request."""
+        out: list[dict] = []
+        for page in self._iter_pages(
+            f"/repos/{owner}/{repo}/pulls/{number}/comments", per_page=per_page
+        ):
+            out.extend(page)
+        return out
+
+    def get_issue_comments(
+        self,
+        owner: str,
+        repo: str,
+        number: int,
+        per_page: int = 100,
+    ) -> list[dict]:
+        """Return the comments on an issue (or on a PR's discussion thread)."""
+        out: list[dict] = []
+        for page in self._iter_pages(
+            f"/repos/{owner}/{repo}/issues/{number}/comments", per_page=per_page
+        ):
+            out.extend(page)
+        return out
+
+    def get_issue_timeline(
+        self,
+        owner: str,
+        repo: str,
+        number: int,
+        per_page: int = 100,
+    ) -> list[dict]:
+        """Return an issue's timeline events (labeled, closed, referenced, ...)."""
+        out: list[dict] = []
+        for page in self._iter_pages(
+            f"/repos/{owner}/{repo}/issues/{number}/timeline", per_page=per_page
+        ):
+            out.extend(page)
+        return out
+
     # ------------------------------------------------------------------
     # Team / organization
     # ------------------------------------------------------------------
@@ -743,9 +872,12 @@ class GitHubAPI:
     def _since_iso(self, days: int) -> str:
         return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat() + "Z"
 
-    def _collect_commits(self, owner: str, repo: str, since: str):
+    def _collect_commits(
+        self, owner: str, repo: str, since: str, until: Optional[str] = None
+    ):
         """
-        Return (counts, latest_dates, recent_list, total) for commits since `since`.
+        Return (counts, latest_dates, recent_list, total) for commits between
+        `since` and `until` (both ISO strings). `until` is optional.
 
         ``counts`` maps a GitHub login to the number of commits authored by
         that account (matched via ``commit.author.login``). Commits whose
@@ -757,8 +889,11 @@ class GitHubAPI:
         latest: dict[str, datetime] = {}
         recent: list[dict] = []
         total = 0
+        params: dict[str, Any] = {"since": since}
+        if until:
+            params["until"] = until
         for page in self._iter_pages(
-            f"/repos/{owner}/{repo}/commits", params={"since": since}, per_page=100
+            f"/repos/{owner}/{repo}/commits", params=params, per_page=100
         ):
             for commit in page:
                 total += 1
@@ -799,13 +934,24 @@ class GitHubAPI:
             for commit in page:
                 yield commit
 
-    def build_team_report(self, owner: str, repo: str, days: Optional[int] = None) -> dict[str, Any]:
+    def build_team_report(
+        self,
+        owner: str,
+        repo: str,
+        days: Optional[int] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+    ) -> dict[str, Any]:
         """
         Aggregate everything needed by the dashboard into one structure.
 
         Team members come from the real repository collaborators
         (GET /repos/{owner}/{repo}/collaborators), with the repository owner
         guaranteed to be present and GITHUB_TEAM members merged in as well.
+
+        The activity window is the last `days` days (default
+        ACTIVITY_WINDOW_DAYS). For exact ranges pass explicit `since`/`until`
+        ISO strings instead - both are optional and any combination works.
 
         Returns a dict with:
             overview:   {members, active/inactive counts, commits, PRs, issues}
@@ -820,8 +966,9 @@ class GitHubAPI:
         from utils import activity as activity_mod
 
         days = days or settings.ACTIVITY_WINDOW_DAYS
-        since = self._since_iso(days)
-        logger.info("GitHub repository: %s/%s (%dd activity window)", owner, repo, days)
+        if since is None:
+            since = self._since_iso(days)
+        logger.info("GitHub repository: %s/%s (since %s, until %s)", owner, repo, since, until)
 
         # --- Repo metadata (owner identity is used below) ---
         try:
@@ -897,6 +1044,9 @@ class GitHubAPI:
                     "pending": pending,
                     "commits": 0,
                     "commits_all_time": contributor_counts.get(login, 0),
+                    "contributions": contributor_counts.get(login, 0),
+                    "additions": 0,
+                    "deletions": 0,
                     "pr_count": 0,
                     "prs_created": 0,
                     "prs_open": 0,
@@ -1006,7 +1156,7 @@ class GitHubAPI:
 
         # --- Commits (each attributed to commit.author.login) ---
         commit_counts, last_commit, recent_commits, commit_total = self._collect_commits(
-            owner, repo, since
+            owner, repo, since, until
         )
         logger.info("Commits fetched: %d (window: %d)", commit_total, len(recent_commits))
         member_index = {m["username"]: m for m in members}
@@ -1021,7 +1171,9 @@ class GitHubAPI:
         prs: list[dict[str, Any]] = []
         prs_in_window = [
             pr for pr in prs_all
-            if self._within_window(pr.get("created_at") or pr.get("updated_at"), since)
+            if self._within_window(
+                pr.get("created_at") or pr.get("updated_at"), since, until
+            )
         ]
         for pr in prs_in_window[:40]:
             number = pr.get("number", 0)
@@ -1089,7 +1241,9 @@ class GitHubAPI:
         for issue in issues_all:
             if issue.get("pull_request"):
                 continue
-            if not self._within_window(issue.get("created_at") or issue.get("updated_at"), since):
+            if not self._within_window(
+                issue.get("created_at") or issue.get("updated_at"), since, until
+            ):
                 continue
             author = (issue.get("user") or {}).get("login", "")
             if author:
@@ -1127,13 +1281,16 @@ class GitHubAPI:
             activity_feed.append(
                 {
                     "author": c.get("author") or "unknown",
+                    "actor": c.get("author") or "unknown",
                     "type": "push",
+                    "category": "commit",
                     "action": "pushed commit",
                     "title": c.get("message", ""),
                     "date": c.get("date", ""),
                     "relative": relative_time_label(c.get("date", "")),
                     "url": c.get("html_url", ""),
                     "sha": c.get("sha", ""),
+                    "detail": {"sha": c.get("full_sha", ""), "message": c.get("message", "")},
                 }
             )
         for pr in prs_in_window:
@@ -1147,12 +1304,16 @@ class GitHubAPI:
             activity_feed.append(
                 {
                     "author": pr_author,
+                    "actor": pr_author,
                     "type": "pull_request",
+                    "category": "pull_request",
                     "action": pr_action,
                     "title": pr.get("title", ""),
                     "date": pr.get("updated_at") or pr.get("created_at") or "",
                     "relative": relative_time_label(pr.get("updated_at") or pr.get("created_at") or ""),
                     "url": pr.get("html_url", ""),
+                    "number": pr.get("number"),
+                    "detail": {"number": pr.get("number"), "title": pr.get("title", "")},
                 }
             )
         for issue in issues:
@@ -1160,7 +1321,9 @@ class GitHubAPI:
             activity_feed.append(
                 {
                     "author": issue_author,
+                    "actor": issue_author,
                     "type": "issue",
+                    "category": "issue",
                     "action": (
                         "closed issue" if issue.get("state") == "closed" else "opened issue"
                     ),
@@ -1168,10 +1331,29 @@ class GitHubAPI:
                     "date": issue.get("updated_at") or issue.get("created_at") or "",
                     "relative": relative_time_label(issue.get("updated_at") or issue.get("created_at") or ""),
                     "url": issue.get("html_url", ""),
+                    "number": issue.get("number"),
+                    "detail": {"number": issue.get("number"), "title": issue.get("title", "")},
                 }
             )
+
+        # --- Real GitHub event stream merged into the feed ---------------
+        # This surfaces pushes, branch creation, members added, reviews and
+        # comments that the synthesized feed above cannot see.
+        try:
+            events = self.get_repo_events(owner, repo, since=since)
+        except GitHubError as exc:
+            logger.warning(
+                "Could not fetch repo events for %s/%s (%s).",
+                owner, repo, exc.message,
+            )
+            events = []
+        for event in events:
+            item = self._event_feed_item(event)
+            if item and self._within_window(item.get("date"), since, until):
+                activity_feed.append(item)
+
         activity_feed.sort(key=lambda item: item.get("date") or "", reverse=True)
-        activity_feed = activity_feed[:50]
+        activity_feed = activity_feed[:100]
 
         # --- Languages ---
         try:
@@ -1205,12 +1387,14 @@ class GitHubAPI:
 
         # --- Recent pushes (commit details for the top N) ---
         pushes: list[dict[str, Any]] = []
-        for commit in recent_commits[-15:]:
+        total_additions = 0
+        total_deletions = 0
+        for commit in recent_commits[:COMMIT_DETAIL_LIMIT]:
             try:
                 detail = self.get_commit_details(owner, repo, commit["full_sha"])
                 if not isinstance(detail, dict):
                     raise GitHubError("Unexpected commit detail payload", status_code=502)
-                commit["files"] = [
+                files = [
                     {
                         "filename": f.get("filename", ""),
                         "additions": f.get("additions", 0),
@@ -1219,10 +1403,22 @@ class GitHubAPI:
                     }
                     for f in detail.get("files", [])
                 ][:30]
-                commit["stats"] = {
-                    "additions": detail.get("stats", {}).get("additions", 0),
-                    "deletions": detail.get("stats", {}).get("deletions", 0),
+                stats = {
+                    "additions": detail.get("stats", {}).get("additions", 0) or 0,
+                    "deletions": detail.get("stats", {}).get("deletions", 0) or 0,
                 }
+                commit["files"] = files
+                commit["stats"] = stats
+                total_additions += stats["additions"]
+                total_deletions += stats["deletions"]
+                author_login = commit.get("author")
+                if author_login and author_login in member_index:
+                    member_index[author_login]["additions"] = (
+                        member_index[author_login].get("additions", 0) + stats["additions"]
+                    )
+                    member_index[author_login]["deletions"] = (
+                        member_index[author_login].get("deletions", 0) + stats["deletions"]
+                    )
             except (GitHubError, AttributeError, TypeError):
                 commit["files"] = []
                 commit["stats"] = {"additions": 0, "deletions": 0}
@@ -1230,6 +1426,22 @@ class GitHubAPI:
         pushes.reverse()
 
         total_members = len(members)
+        # PR/issue counts come from the FULL lists (not the time-window slice)
+        # so the overview always matches the actual repo state.
+        open_prs = sum(1 for pr in prs_all if pr.get("state") == "open")
+        merged_prs = sum(1 for pr in prs_all if pr.get("merged_at"))
+        closed_prs = sum(
+            1 for pr in prs_all
+            if pr.get("state") == "closed" and not pr.get("merged_at")
+        )
+        total_prs = len(prs_all)
+        real_issues = [i for i in issues_all if not i.get("pull_request")]
+        open_issues = sum(1 for i in real_issues if i.get("state") == "open")
+        closed_issues = sum(
+            1 for i in real_issues
+            if i.get("state") == "closed" and i.get("closed_at")
+        )
+        contributors_count = len(contributors)
         overview = {
             "members": total_members,
             # Active = activity within the last RECENTLY_ACTIVE_DAYS (7) days.
@@ -1240,9 +1452,16 @@ class GitHubAPI:
                 1 for m in members if m["activity_status"] == "RECENTLY ACTIVE"
             ),
             "total_commits": commit_total,
-            "open_prs": sum(1 for pr in prs if pr["state"] == "open"),
-            "merged_prs": sum(1 for pr in prs if pr["merged"]),
-            "open_issues": sum(1 for i in issues if i["state"] == "open"),
+            "open_prs": open_prs,
+            "merged_prs": merged_prs,
+            "closed_prs": closed_prs,
+            "total_prs": total_prs,
+            "open_issues": open_issues,
+            "closed_issues": closed_issues,
+            "contributors_count": contributors_count,
+            "activity_events": len(events),
+            "total_additions": total_additions,
+            "total_deletions": total_deletions,
         }
 
         return {
@@ -1256,6 +1475,15 @@ class GitHubAPI:
             "pull_requests": prs,
             "issues": issues,
             "languages": languages,
+            "contributors": [
+                {
+                    "username": c.get("login", ""),
+                    "contributions": c.get("contributions", 0),
+                    "avatar": c.get("avatar_url", ""),
+                    "url": c.get("html_url", ""),
+                }
+                for c in contributors
+            ],
             "repo": {
                 "name": repo_meta.get("full_name", f"{owner}/{repo}"),
                 "description": repo_meta.get("description", ""),
@@ -1267,8 +1495,12 @@ class GitHubAPI:
         }
 
     @staticmethod
-    def _within_window(date_str: Optional[str], since: str) -> bool:
-        """True when an ISO date is newer than `since`."""
+    def _within_window(
+        date_str: Optional[str],
+        since: str,
+        until: Optional[str] = None,
+    ) -> bool:
+        """True when an ISO date is between `since` and `until` (both ISO)."""
         if not date_str:
             return False
         try:
@@ -1278,8 +1510,17 @@ class GitHubAPI:
         try:
             since_parsed = datetime.fromisoformat(since.replace("Z", "+00:00"))
         except ValueError:
-            return True
-        return parsed >= since_parsed
+            since_parsed = None
+        if since_parsed is not None and parsed < since_parsed:
+            return False
+        if until:
+            try:
+                until_parsed = datetime.fromisoformat(until.replace("Z", "+00:00"))
+            except ValueError:
+                until_parsed = None
+            if until_parsed is not None and parsed > until_parsed:
+                return False
+        return True
 
     @staticmethod
     def _track_latest(
@@ -1296,6 +1537,327 @@ class GitHubAPI:
             return
         if login not in mapping or parsed > mapping[login]:
             mapping[login] = parsed
+
+    @staticmethod
+    def _event_feed_item(event: dict) -> Optional[dict]:
+        """Map a raw GitHub event into an activity-feed item (or None)."""
+        etype = event.get("type", "")
+        actor = ((event.get("actor") or {}).get("login")) or ""
+        created = event.get("created_at", "")
+        payload = event.get("payload") or {}
+        repo_full = ((event.get("repo") or {}).get("name")) or ""
+        repo_url = f"https://github.com/{repo_full}"
+
+        if etype == "PushEvent":
+            commits = payload.get("commits") or []
+            count = len(commits)
+            title = ""
+            if commits:
+                title = (commits[-1].get("message") or "").split("\n")[0]
+            ref = payload.get("ref", "") or ""
+            branch = ref.rsplit("/", 1)[-1] if ref else ""
+            return {
+                "author": actor,
+                "actor": actor,
+                "type": "push",
+                "category": "commit",
+                "action": (
+                    f"pushed {count} commit{'s' if count != 1 else ''}"
+                    + (f" to {branch}" if branch else "")
+                ),
+                "title": title or branch or "branch push",
+                "date": created,
+                "relative": relative_time_label(created),
+                "url": payload.get("compare") or repo_url,
+                "detail": {
+                    "ref": ref,
+                    "count": count,
+                    "shas": [c.get("sha", "")[:7] for c in commits[:20]],
+                },
+            }
+        if etype == "PullRequestEvent":
+            pr = payload.get("pull_request") or {}
+            action = payload.get("action", "updated")
+            state_label = "merged" if pr.get("merged_at") else action
+            return {
+                "author": actor,
+                "actor": actor,
+                "type": "pull_request",
+                "category": "pull_request",
+                "action": f"{action} pull request",
+                "title": pr.get("title", ""),
+                "date": created,
+                "relative": relative_time_label(created),
+                "url": pr.get("html_url", ""),
+                "number": pr.get("number"),
+                "detail": {"state": state_label, "number": pr.get("number")},
+            }
+        if etype == "PullRequestReviewEvent":
+            pr = payload.get("pull_request") or {}
+            state = (payload.get("review") or {}).get("state", "reviewed")
+            return {
+                "author": actor,
+                "actor": actor,
+                "type": "pull_request",
+                "category": "pull_request",
+                "action": f"reviewed pull request ({state})",
+                "title": pr.get("title", ""),
+                "date": created,
+                "relative": relative_time_label(created),
+                "url": pr.get("html_url", ""),
+                "number": pr.get("number"),
+                "detail": {"review_state": state, "number": pr.get("number")},
+            }
+        if etype == "PullRequestReviewCommentEvent":
+            pr = payload.get("pull_request") or {}
+            comment = payload.get("comment") or {}
+            return {
+                "author": actor,
+                "actor": actor,
+                "type": "pull_request",
+                "category": "pull_request",
+                "action": "commented on pull request",
+                "title": pr.get("title", ""),
+                "date": created,
+                "relative": relative_time_label(created),
+                "url": comment.get("html_url") or pr.get("html_url", ""),
+                "number": pr.get("number"),
+                "detail": {
+                    "number": pr.get("number"),
+                    "comment": (comment.get("body") or "")[:200],
+                },
+            }
+        if etype == "IssuesEvent":
+            issue = payload.get("issue") or {}
+            action = payload.get("action", "updated")
+            return {
+                "author": actor,
+                "actor": actor,
+                "type": "issue",
+                "category": "issue",
+                "action": f"{action} issue",
+                "title": issue.get("title", ""),
+                "date": created,
+                "relative": relative_time_label(created),
+                "url": issue.get("html_url", ""),
+                "number": issue.get("number"),
+                "detail": {"state": issue.get("state", ""), "number": issue.get("number")},
+            }
+        if etype == "IssueCommentEvent":
+            issue = payload.get("issue") or {}
+            comment = payload.get("comment") or {}
+            return {
+                "author": actor,
+                "actor": actor,
+                "type": "issue",
+                "category": "issue",
+                "action": "commented on issue",
+                "title": issue.get("title", ""),
+                "date": created,
+                "relative": relative_time_label(created),
+                "url": comment.get("html_url") or issue.get("html_url", ""),
+                "number": issue.get("number"),
+                "detail": {
+                    "number": issue.get("number"),
+                    "comment": (comment.get("body") or "")[:200],
+                },
+            }
+        if etype in ("CreateEvent", "DeleteEvent"):
+            ref_type = payload.get("ref_type", "")
+            ref = payload.get("ref", "") or ""
+            verb = "created" if etype == "CreateEvent" else "deleted"
+            what = f"{ref_type} {ref}".strip() if ref_type else "branch"
+            return {
+                "author": actor,
+                "actor": actor,
+                "type": "branch",
+                "category": "commit",
+                "action": f"{verb} {what}",
+                "title": what,
+                "date": created,
+                "relative": relative_time_label(created),
+                "url": f"{repo_url}/tree/{ref}" if ref else repo_url,
+                "detail": {"ref_type": ref_type, "ref": ref},
+            }
+        if etype == "MemberEvent":
+            member = payload.get("member") or {}
+            return {
+                "author": actor,
+                "actor": actor,
+                "type": "member",
+                "category": "member",
+                "action": f"added member {member.get('login', '')}",
+                "title": f"Member added: {member.get('login', '')}",
+                "date": created,
+                "relative": relative_time_label(created),
+                "url": (member or {}).get("html_url", ""),
+                "detail": {"member": member.get("login", "")},
+            }
+        if etype in ("WatchEvent", "ForkEvent", "ReleaseEvent"):
+            action_map = {
+                "WatchEvent": "starred the repository",
+                "ForkEvent": "forked the repository",
+                "ReleaseEvent": "published a release",
+            }
+            label = action_map.get(etype, etype)
+            return {
+                "author": actor,
+                "actor": actor,
+                "type": "other",
+                "category": "other",
+                "action": label,
+                "title": label,
+                "date": created,
+                "relative": relative_time_label(created),
+                "url": repo_url,
+                "detail": {},
+            }
+        return None
+
+    def build_pr_detail(self, owner: str, repo: str, number: int) -> dict[str, Any]:
+        """Build a rich, dashboard-ready detail view for one pull request."""
+        pr = self.get_pull_request(owner, repo, number)
+        author = (pr.get("user") or {}).get("login", "unknown")
+        additions = (pr or {}).get("additions") or 0
+        deletions = (pr or {}).get("deletions") or 0
+        changed_files = (pr or {}).get("changed_files") or 0
+        try:
+            commits = self.get_pr_commits(owner, repo, number)
+        except GitHubError:
+            commits = []
+        try:
+            comments = self.get_pr_comments(owner, repo, number)
+        except GitHubError:
+            comments = []
+        try:
+            reviews = self.get_pr_reviews(owner, repo, number)
+        except GitHubError:
+            reviews = []
+        return {
+            "number": pr.get("number"),
+            "title": pr.get("title", ""),
+            "state": pr.get("state", ""),
+            "merged": bool(pr.get("merged_at")),
+            "merged_at": pr.get("merged_at"),
+            "author": author,
+            "author_avatar": (pr.get("user") or {}).get("avatar_url", ""),
+            "author_url": (pr.get("user") or {}).get("html_url", ""),
+            "created_at": pr.get("created_at"),
+            "updated_at": pr.get("updated_at"),
+            "body": pr.get("body") or "",
+            "url": pr.get("html_url", ""),
+            "head": (pr.get("head") or {}).get("ref", ""),
+            "base": (pr.get("base") or {}).get("ref", ""),
+            "additions": additions,
+            "deletions": deletions,
+            "changed_files": changed_files,
+            "commits_count": len(commits),
+            "labels": [l.get("name") for l in pr.get("labels") or []],
+            "commits": [
+                {
+                    "sha": c.get("sha", "")[:7],
+                    "full_sha": c.get("sha", ""),
+                    "message": ((c.get("commit") or {}).get("message") or "").split("\n")[0],
+                    "author": ((c.get("commit") or {}).get("author") or {}).get("name", ""),
+                    "date": ((c.get("commit") or {}).get("author") or {}).get("date", ""),
+                }
+                for c in commits[:20]
+            ],
+            "comments": [
+                {
+                    "author": (c.get("user") or {}).get("login", ""),
+                    "date": c.get("created_at", ""),
+                    "body": (c.get("body") or "")[:300],
+                }
+                for c in comments[:20]
+            ],
+            "reviews": [
+                {
+                    "author": (r.get("user") or {}).get("login", ""),
+                    "state": r.get("state", ""),
+                    "submitted_at": r.get("submitted_at", ""),
+                    "body": (r.get("body") or "")[:200],
+                }
+                for r in reviews[:20]
+            ],
+        }
+
+    def build_issue_detail(self, owner: str, repo: str, number: int) -> dict[str, Any]:
+        """Build a rich, dashboard-ready detail view for one issue."""
+        issue = self.get_issue(owner, repo, number)
+        try:
+            comments = self.get_issue_comments(owner, repo, number)
+        except GitHubError:
+            comments = []
+        try:
+            timeline = self.get_issue_timeline(owner, repo, number)
+        except GitHubError:
+            timeline = []
+        events = [
+            {
+                "event": t.get("event", ""),
+                "actor": ((t.get("actor") or {}).get("login")) or "",
+                "date": t.get("created_at", ""),
+            }
+            for t in timeline[:40]
+            if t.get("event") not in ("commented", "cross-referenced")
+        ]
+        return {
+            "number": issue.get("number"),
+            "title": issue.get("title", ""),
+            "state": issue.get("state", ""),
+            "author": (issue.get("user") or {}).get("login", ""),
+            "author_avatar": (issue.get("user") or {}).get("avatar_url", ""),
+            "created_at": issue.get("created_at"),
+            "updated_at": issue.get("updated_at"),
+            "closed_at": issue.get("closed_at"),
+            "body": issue.get("body") or "",
+            "url": issue.get("html_url", ""),
+            "labels": [l.get("name") for l in issue.get("labels") or []],
+            "comments_count": len(comments),
+            "comments": [
+                {
+                    "author": (c.get("user") or {}).get("login", ""),
+                    "date": c.get("created_at", ""),
+                    "body": (c.get("body") or "")[:300],
+                }
+                for c in comments[:20]
+            ],
+            "timeline_events": events,
+        }
+
+    def build_commit_detail(self, owner: str, repo: str, sha: str) -> dict[str, Any]:
+        """Build a dashboard-ready detail view for a single commit."""
+        detail = self.get_commit_details(owner, repo, sha)
+        if not isinstance(detail, dict):
+            return {"sha": sha, "error": "Commit detail unavailable"}
+        files = detail.get("files") or []
+        return {
+            "sha": detail.get("sha", sha),
+            "short_sha": sha[:7],
+            "message": ((detail.get("commit") or {}).get("message") or "").split("\n")[0],
+            "full_message": (detail.get("commit") or {}).get("message") or "",
+            "author": ((detail.get("commit") or {}).get("author") or {}).get("name", ""),
+            "author_login": ((detail.get("author") or {}).get("login")) or "",
+            "author_avatar": ((detail.get("author") or {}).get("avatar_url")) or "",
+            "date": ((detail.get("commit") or {}).get("author") or {}).get("date", ""),
+            "url": detail.get("html_url", ""),
+            "stats": {
+                "additions": (detail.get("stats") or {}).get("additions", 0),
+                "deletions": (detail.get("stats") or {}).get("deletions", 0),
+                "total": (detail.get("stats") or {}).get("total", 0),
+            },
+            "files": [
+                {
+                    "filename": f.get("filename", ""),
+                    "status": f.get("status", ""),
+                    "additions": f.get("additions", 0),
+                    "deletions": f.get("deletions", 0),
+                    "patch": (f.get("patch") or "")[:400],
+                }
+                for f in files[:30]
+            ],
+        }
 
     def build_member_profile(self, owner: str, repo: str, username: str, days: Optional[int] = None) -> dict[str, Any]:
         """Build a focused profile for a single team member."""

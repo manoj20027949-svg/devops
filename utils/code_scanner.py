@@ -83,14 +83,51 @@ class Finding:
     description: str
     recommendation: str
 
+    # Keys whose values look like credentials. Any of these on a matched
+    # line gets masked so real secrets never reach the UI or the API.
+    _SECRET_KEY_RE = re.compile(
+        r"(?i)\b(password|passwd|secret|api[_-]?key|client[_-]?secret|"
+        r"access[_-]?token|auth[_-]?token|token|secret[_-]?key|apikey|"
+        r"private[_-]?key|connection[_-]?string)\b\s*"
+    )
+
+    @staticmethod
+    def _mask_line(line: str) -> str:
+        """
+        Redact credential-looking values on a single line.
+
+        `API_KEY = "sk-abc123"` becomes `API_KEY = "********"`. Any
+        remainder of the line after the value is also dropped because
+        following tokens could belong to a secret (e.g. a comma list).
+        """
+        match = Finding._SECRET_KEY_RE.search(line)
+        if not match:
+            return line
+        value_start = match.end()
+        rest = line[value_start:]
+        # Skip an assignment operator and optional whitespace/quotes.
+        rest = rest.lstrip()
+        if rest.startswith(("=", ":")):
+            rest = rest[1:].lstrip()
+            if rest.startswith(('"', "'", "`")):
+                rest = rest[1:]
+        if not rest:
+            return line
+        # Only mask when a plausible value is present (>=4 chars), so
+        # lines like `password = ""` or `token = None` stay readable.
+        raw = rest.rstrip()
+        if len(raw) < 4 or raw.startswith(("None", "null", "False", "True", "0", "1")):
+            return line
+        return line[:value_start] + "= \"********\""
+
     def to_dict(self) -> dict:
-        """Serialize for templates / JSON endpoints."""
+        """Serialize for templates / JSON endpoints (secrets masked)."""
         return {
             "rule_id": self.rule_id,
             "severity": self.severity,
             "filename": self.filename,
             "line_number": self.line_number,
-            "line_content": self.line_content.strip()[:120],
+            "line_content": self._mask_line(self.line_content).strip()[:120],
             "description": self.description,
             "recommendation": self.recommendation,
         }
