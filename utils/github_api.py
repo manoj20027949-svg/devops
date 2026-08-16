@@ -46,6 +46,9 @@ _HTTP_CACHE: dict[tuple, tuple[float, object]] = {}
 
 # How many recent commits get per-commit file/stat details fetched.
 COMMIT_DETAIL_LIMIT = 50
+# How many recent PRs get per-PR detail + review state fetched for the live
+# PR list (keeps each refresh within a bounded number of GitHub API calls).
+PR_DETAIL_LIMIT = 30
 
 
 def clear_http_cache() -> None:
@@ -62,6 +65,53 @@ class GitHubError(Exception):
         self.status_code = status_code
 
 
+def review_status_for(states, requested_reviewers: int = 0) -> str:
+    """
+    Collapse a PR's raw review states into the dashboard's review column.
+
+    Returns one of 'approved' | 'changes_requested' | 'commented' |
+    'pending' | 'not_reviewed'. 'pending' means reviewers are requested
+    but nobody has submitted a review yet.
+    """
+    states = [str(s).upper() for s in (states or [])]
+    if "APPROVED" in states:
+        return "approved"
+    if "CHANGES_REQUESTED" in states:
+        return "changes_requested"
+    if any(s in ("COMMENTED", "DISMISSED") for s in states):
+        return "commented"
+    if requested_reviewers:
+        return "pending"
+    return "not_reviewed"
+
+
+def format_pull_request(
+    pr: dict,
+    review_status: str = "not_reviewed",
+    additions: Optional[int] = None,
+    deletions: Optional[int] = None,
+    changed_files: Optional[int] = None,
+) -> dict:
+    """Normalize a raw GitHub pull request into the dashboard list shape."""
+    author = (pr.get("user") or {}).get("login", "")
+    return {
+        "number": pr.get("number", 0),
+        "title": pr.get("title", ""),
+        "author": author,
+        "login": author,
+        "state": pr.get("state", ""),
+        "draft": bool(pr.get("draft")),
+        "merged": bool(pr.get("merged_at")),
+        "html_url": pr.get("html_url", ""),
+        "created_at": pr.get("created_at", ""),
+        "updated_at": pr.get("updated_at", ""),
+        "additions": int(additions or 0),
+        "deletions": int(deletions or 0),
+        "changed_files": int(changed_files or 0),
+        "review_status": review_status,
+    }
+
+
 class GitHubAPI:
     """Authenticated GitHub REST API client."""
 
@@ -72,7 +122,7 @@ class GitHubAPI:
             {
                 "Authorization": f"Bearer {self.token}",
                 "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
+                "X-GitHub-Api-Version": "2026-03-10",
                 "User-Agent": "GitPulse-Team-Intelligence",
             }
         )
@@ -557,16 +607,73 @@ class GitHubAPI:
         repo: str,
         state: str = "open",
         per_page: int = 100,
+        sort: str = "updated",
+        direction: str = "desc",
     ) -> list[dict]:
-        """Return pull requests filtered by state ('open' | 'closed' | 'all')."""
+        """
+        Return pull requests filtered by state ('open' | 'closed' | 'all').
+
+        Sorted by most recently updated first by default, so the live PR
+        table always leads with the most recently active work.
+        """
         out: list[dict] = []
         for page in self._iter_pages(
             f"/repos/{owner}/{repo}/pulls",
-            params={"state": state},
+            params={"state": state, "sort": sort, "direction": direction},
             per_page=per_page,
         ):
             out.extend(page)
         return out
+
+    def get_pull_requests_summary(
+        self,
+        owner: str,
+        repo: str,
+        state: str = "open",
+        per_page: int = 100,
+        details_limit: int = PR_DETAIL_LIMIT,
+    ) -> list[dict]:
+        """
+        Return pull requests formatted for the dashboard's PR table.
+
+        The most recently updated PRs (up to ``details_limit``) also get
+        their diff stats and review state fetched. All calls go through
+        the 60-second HTTP cache, so repeated refreshes stay cheap and the
+        GitHub API is not hammered.
+        """
+        prs = self.get_pull_requests(owner, repo, state=state, per_page=per_page)
+        formatted: list[dict] = []
+        for pr in prs[:details_limit]:
+            number = pr.get("number", 0)
+            detail = {}
+            try:
+                detail = self.get_pull_request(owner, repo, number)
+            except GitHubError:
+                pass
+            reviews = []
+            try:
+                reviews = self.get_pr_reviews(owner, repo, number)
+            except GitHubError:
+                pass
+            requested = 0
+            try:
+                requested = len(self.get_pr_reviewers(owner, repo, number).get("users", []))
+            except GitHubError:
+                pass
+            formatted.append(
+                format_pull_request(
+                    pr,
+                    review_status=review_status_for(
+                        [r.get("state", "") for r in reviews], requested
+                    ),
+                    additions=detail.get("additions"),
+                    deletions=detail.get("deletions"),
+                    changed_files=detail.get("changed_files"),
+                )
+            )
+        for pr in prs[details_limit:]:
+            formatted.append(format_pull_request(pr))
+        return formatted
 
     def get_issues(
         self,

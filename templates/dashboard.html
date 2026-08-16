@@ -468,7 +468,10 @@
     <div class="glass card-pulse">
         <div class="card-header-row">
             <h2>Pull Requests</h2>
-            <span class="badge badge-glass"><span id="prCount">{{ report.pull_requests|default([])|length }}</span></span>
+            <div class="d-flex align-items-center gap-2">
+                <span class="badge badge-glass"><span id="prCount">{{ report.pull_requests|default([])|length }}</span></span>
+                <button id="prRefreshBtn" class="btn btn-pulse btn-sm" type="button" title="Fetch the latest pull requests from GitHub">↻ Refresh</button>
+            </div>
         </div>
         <div class="p-3 pb-1 border-bottom border-light">
             <div class="row g-2">
@@ -1008,4 +1011,5 @@
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/charts.js') }}"></script>
 <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+<script src="{{ url_for('static', filename='js/pull_requests.js') }}"></script>
 {% endblock %}

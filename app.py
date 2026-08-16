@@ -1052,10 +1052,49 @@ def register_api_routes(app: Flask) -> None:
     @app.route("/api/pull-requests")
     @login_required
     def api_pull_requests():
-        report, error = _report_or_error()
-        if error:
-            return jsonify({"error": error}), 400
-        return jsonify({"pull_requests": report["pull_requests"]})
+        """
+        Return the selected repository's pull requests, fetched live from
+        GitHub (most recently updated first).
+
+        Success: {"success": true, "pull_requests": [...], "count": N, "error": null}
+        Failure: {"success": false, "pull_requests": [], "count": 0, "error": "..."}
+
+        Optional query param ?state=open|closed|all (default "open").
+        """
+        owner, repo = _current_repo()
+        if not (owner and repo):
+            return jsonify({
+                "success": False,
+                "pull_requests": [],
+                "count": 0,
+                "error": "No repository selected. Choose a repository from the dashboard first.",
+            }), 400
+        if not (get_session_token() or settings.GITHUB_TOKEN):
+            return jsonify({
+                "success": False,
+                "pull_requests": [],
+                "count": 0,
+                "error": "No GitHub token configured. Log in or set GITHUB_TOKEN in your .env file.",
+            }), 400
+
+        state = request.args.get("state", "open")
+        if state not in ("open", "closed", "all"):
+            state = "open"
+        try:
+            prs = get_api().get_pull_requests_summary(owner, repo, state=state)
+        except GitHubError as exc:
+            return jsonify({
+                "success": False,
+                "pull_requests": [],
+                "count": 0,
+                "error": exc.message,
+            }), 400
+        return jsonify({
+            "success": True,
+            "pull_requests": prs,
+            "count": len(prs),
+            "error": None,
+        })
 
     @app.route("/api/issues")
     @login_required

@@ -980,3 +980,102 @@ def test_api_dashboard_refresh_returns_json(client, monkeypatch):
     assert "ai_errors" in payload["ai"]["error_counts"]
     assert "ai_fixed_count" in payload["ai"]["error_counts"]
     assert payload["ai"]["error_counts"]["static_errors"] >= 0
+
+
+def test_api_pull_requests_requires_login(client):
+    response = client.get("/api/pull-requests")
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/login")
+
+
+def test_api_pull_requests_success_format(client, monkeypatch):
+    prs = [{"number": 2, "title": "Fix login", "author": "alice", "state": "open"}]
+    monkeypatch.setattr(
+        GitHubAPI, "get_pull_requests_summary",
+        lambda self, o, r, state="open": prs,
+    )
+    _session_with_repo(client)
+
+    response = client.get("/api/pull-requests")
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["success"] is True
+    assert payload["count"] == 1
+    assert payload["pull_requests"] == prs
+    assert payload["error"] is None
+
+
+def test_api_pull_requests_defaults_to_open_and_forwards_state(client, monkeypatch):
+    captured = {}
+
+    def fake_summary(self, o, r, state="open"):
+        captured["state"] = state
+        return []
+
+    monkeypatch.setattr(GitHubAPI, "get_pull_requests_summary", fake_summary)
+    _session_with_repo(client)
+
+    client.get("/api/pull-requests")
+    assert captured["state"] == "open"
+
+    client.get("/api/pull-requests?state=all")
+    assert captured["state"] == "all"
+
+    client.get("/api/pull-requests?state=bogus")
+    assert captured["state"] == "open"
+
+
+def test_api_pull_requests_requires_repo(client, monkeypatch):
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "GITHUB_OWNER", "")
+    monkeypatch.setattr(settings, "GITHUB_REPO", "")
+    with client.session_transaction() as sess:
+        sess["github_token"] = "t"
+
+    response = client.get("/api/pull-requests")
+    payload = response.get_json()
+
+    assert response.status_code == 400
+    assert payload["success"] is False
+    assert payload["pull_requests"] == []
+    assert payload["count"] == 0
+    assert "No repository selected" in payload["error"]
+
+
+def test_api_pull_requests_requires_token(client, monkeypatch):
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "GITHUB_TOKEN", "")
+    monkeypatch.setattr("utils.auth.is_logged_in", lambda: True)
+    with client.session_transaction() as sess:
+        sess["selected_repo"] = "o/r"
+
+    response = client.get("/api/pull-requests")
+    payload = response.get_json()
+
+    assert response.status_code == 400
+    assert payload["success"] is False
+    assert "No GitHub token configured" in payload["error"]
+
+
+def test_api_pull_requests_returns_friendly_error(client, monkeypatch):
+    from utils.github_api import GitHubError
+
+    def reject(self, owner, repo, state="open"):
+        raise GitHubError(
+            "Repository or owner not found (HTTP 404 on /repos/o/r/pulls). "
+            "Check that the repository exists and that your token has access to it.",
+            status_code=404,
+        )
+
+    monkeypatch.setattr(GitHubAPI, "get_pull_requests_summary", reject)
+    _session_with_repo(client)
+
+    response = client.get("/api/pull-requests")
+    payload = response.get_json()
+
+    assert response.status_code == 400
+    assert payload["success"] is False
+    assert "HTTP 404" in payload["error"]

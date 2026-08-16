@@ -216,47 +216,31 @@
         alert(title + "\n\n" + problem + (detail ? "\n\n" + detail : "") + (suggestions ? "\n\n" + suggestions : ""));
     }
 
-    // Analyze a pull request
-    document.querySelectorAll(".ai-pr-btn").forEach(function (btn) {
-        btn.addEventListener("click", function () {
-            var number = btn.dataset.pr;
+    // Analyze a pull request / issue.
+    // Delegated (not per-element) so buttons rendered later by
+    // pull_requests.js keep working without rebinding.
+    function bindAiAction(selector, kind, label) {
+        document.addEventListener("click", function (event) {
+            var btn = event.target.closest(selector);
+            if (!btn) return;
+            var number = btn.dataset[kind];
             btn.disabled = true;
             btn.textContent = "Analyzing…";
-            postJSON("/api/ai/analyze-pr", { number: number }).then(function (res) {
+            postJSON("/api/ai/analyze-" + kind, { number: number }).then(function (res) {
                 btn.disabled = false;
-                btn.textContent = "Analyze";
+                btn.textContent = label;
                 if (res.ok) {
-                    showResult("AI Analysis · PR #" + number, res.payload);
+                    showResult("AI Analysis · " + (kind === "pr" ? "PR" : "Issue") + " #" + number, res.payload);
                 } else {
                     alert("Analysis failed: " + (res.payload.error || "unknown error"));
                 }
             }).catch(function () {
                 btn.disabled = false;
-                btn.textContent = "Analyze";
-                alert("Network error while analyzing PR.");
+                btn.textContent = label;
+                alert("Network error while analyzing " + kind + ".");
             });
         });
-    });
-
-    // Analyze an issue
-    document.querySelectorAll(".ai-issue-btn").forEach(function (btn) {
-        btn.addEventListener("click", function () {
-            var number = btn.dataset.issue;
-            btn.disabled = true;
-            btn.textContent = "Analyzing…";
-            postJSON("/api/ai/analyze-issue", { number: number }).then(function (res) {
-                btn.disabled = false;
-                btn.textContent = "Analyze";
-                if (res.ok) {
-                    showResult("AI Analysis · Issue #" + number, res.payload);
-                } else {
-                    alert("Analysis failed: " + (res.payload.error || "unknown error"));
-                }
-            }).catch(function () {
-                btn.disabled = false;
-                btn.textContent = "Analyze";
-                alert("Network error while analyzing issue.");
-            });
-        });
-    });
+    }
+    bindAiAction(".ai-pr-btn", "pr", "Analyze");
+    bindAiAction(".ai-issue-btn", "issue", "Analyze");
 })();

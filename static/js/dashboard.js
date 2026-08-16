@@ -216,6 +216,7 @@
                 updateCharts(payload);
                 updateActivityFeed(payload.activity_feed);
                 updateCommitTable(payload.pushes);
+                if (window.refreshPullRequests) window.refreshPullRequests();
                 setStatValue("ai_errors_count", (payload.ai && payload.ai.error_counts && payload.ai.error_counts.ai_errors) || 0);
                 setStatValue("ai_fixed_count", (payload.ai && payload.ai.error_counts && payload.ai.error_counts.ai_fixed_count) || 0);
                 if (lastUpdatedBadge && payload.last_updated) {
@@ -389,6 +390,10 @@
     if (prSearch) prSearch.addEventListener("input", applyPrFilters);
     if (prState) prState.addEventListener("change", applyPrFilters);
     if (prAuthor) prAuthor.addEventListener("change", applyPrFilters);
+
+    // Exposed so pull_requests.js can re-apply client filters after it
+    // re-renders the PR table from the live GitHub data.
+    window.applyPrFilters = applyPrFilters;
 
     if (prsBody) {
         prsBody.addEventListener("click", function (event) {

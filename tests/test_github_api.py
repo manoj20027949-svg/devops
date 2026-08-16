@@ -2,7 +2,13 @@
 
 import pytest
 
-from utils.github_api import GitHubAPI, GitHubError, compute_activity_score
+from utils.github_api import (
+    GitHubAPI,
+    GitHubError,
+    compute_activity_score,
+    format_pull_request,
+    review_status_for,
+)
 
 
 def _repo_payload(owner="o", repo="r"):
@@ -198,6 +204,150 @@ class TestBuildTeamReport:
 
         assert report["members"][0]["last_active"] == "2024-01-01T00:00:00.123456+00:00"
         assert report["members"][0]["last_active_days"] >= 0
+
+
+class TestReviewStatus:
+    def test_approved_wins_over_other_states(self):
+        assert review_status_for(["APPROVED", "COMMENTED"]) == "approved"
+
+    def test_changes_requested_beats_commented(self):
+        assert review_status_for(["COMMENTED", "CHANGES_REQUESTED"]) == "changes_requested"
+
+    def test_commented_and_dismissed(self):
+        assert review_status_for(["COMMENTED"]) == "commented"
+        assert review_status_for(["DISMISSED"]) == "commented"
+
+    def test_pending_when_reviewers_requested(self):
+        assert review_status_for([], requested_reviewers=2) == "pending"
+
+    def test_not_reviewed_when_no_activity(self):
+        assert review_status_for([]) == "not_reviewed"
+
+
+class TestFormatPullRequest:
+    def test_normalizes_raw_github_pr(self):
+        pr = {
+            "number": 7,
+            "title": "Add feature",
+            "user": {"login": "alice"},
+            "state": "open",
+            "draft": True,
+            "html_url": "https://github.com/o/r/pull/7",
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-02T00:00:00Z",
+        }
+        out = format_pull_request(
+            pr, review_status="approved", additions=10, deletions=2, changed_files=3
+        )
+        assert out["number"] == 7
+        assert out["title"] == "Add feature"
+        assert out["author"] == "alice"
+        assert out["login"] == "alice"
+        assert out["draft"] is True
+        assert out["merged"] is False
+        assert out["review_status"] == "approved"
+        assert out["additions"] == 10
+        assert out["deletions"] == 2
+        assert out["changed_files"] == 3
+
+    def test_defaults_when_values_missing(self):
+        out = format_pull_request({})
+        assert out["author"] == ""
+        assert out["additions"] == 0
+        assert out["deletions"] == 0
+        assert out["changed_files"] == 0
+        assert out["review_status"] == "not_reviewed"
+
+
+class TestPullRequestsSummary:
+    @staticmethod
+    def _pr(number, title="T", author="alice", state="open"):
+        return {
+            "number": number,
+            "title": title,
+            "user": {"login": author},
+            "state": state,
+            "draft": False,
+            "html_url": f"https://github.com/o/r/pull/{number}",
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-02T00:00:00Z",
+        }
+
+    def test_get_pull_requests_forwards_sort_and_direction(self, monkeypatch):
+        api = GitHubAPI("t")
+        seen = {}
+
+        def fake_request(method, path, params=None, retries=3):
+            seen.update(params or {})
+            return []
+
+        monkeypatch.setattr(api, "_request", fake_request)
+
+        api.get_pull_requests("o", "r")
+
+        assert seen["state"] == "open"
+        assert seen["sort"] == "updated"
+        assert seen["direction"] == "desc"
+        assert seen["per_page"] == 100
+
+    def test_summary_formats_with_review_and_stats(self, monkeypatch):
+        api = GitHubAPI("t")
+        prs = [self._pr(1), self._pr(2, title="Second")]
+        monkeypatch.setattr(api, "get_pull_requests", lambda o, r, **kw: prs)
+        monkeypatch.setattr(
+            api, "get_pull_request",
+            lambda o, r, n: {"additions": 5, "deletions": 1, "changed_files": 2},
+        )
+        monkeypatch.setattr(api, "get_pr_reviews", lambda o, r, n: [{"state": "APPROVED"}])
+        monkeypatch.setattr(
+            api, "get_pr_reviewers", lambda o, r, n: {"users": [{"login": "bob"}]}
+        )
+
+        out = api.get_pull_requests_summary("o", "r")
+
+        assert len(out) == 2
+        assert out[0]["number"] == 1
+        assert out[0]["review_status"] == "approved"
+        assert out[0]["additions"] == 5
+        assert out[0]["deletions"] == 1
+        assert out[0]["changed_files"] == 2
+        assert out[1]["number"] == 2
+
+    def test_summary_resilient_when_detail_fails(self, monkeypatch):
+        api = GitHubAPI("t")
+        monkeypatch.setattr(api, "get_pull_requests", lambda o, r, **kw: [self._pr(1)])
+
+        def boom(o, r, n):
+            raise GitHubError("boom", status_code=404)
+
+        monkeypatch.setattr(api, "get_pull_request", boom)
+        monkeypatch.setattr(api, "get_pr_reviews", boom)
+        monkeypatch.setattr(api, "get_pr_reviewers", boom)
+
+        out = api.get_pull_requests_summary("o", "r")
+
+        assert out[0]["review_status"] == "not_reviewed"
+        assert out[0]["additions"] == 0
+
+    def test_summary_respects_details_limit(self, monkeypatch):
+        api = GitHubAPI("t")
+        prs = [self._pr(n) for n in range(1, 6)]
+        detail_calls = []
+
+        def fake_detail(o, r, n):
+            detail_calls.append(n)
+            return {}
+
+        monkeypatch.setattr(api, "get_pull_requests", lambda o, r, **kw: prs)
+        monkeypatch.setattr(api, "get_pull_request", fake_detail)
+        monkeypatch.setattr(api, "get_pr_reviews", lambda o, r, n: [])
+        monkeypatch.setattr(api, "get_pr_reviewers", lambda o, r, n: {"users": []})
+
+        out = api.get_pull_requests_summary("o", "r", details_limit=2)
+
+        assert len(out) == 5
+        assert detail_calls == [1, 2]
+        assert out[4]["additions"] == 0
 
 
 class TestCollaboratorHelpers:
