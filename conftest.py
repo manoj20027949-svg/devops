@@ -30,3 +30,4 @@ def _no_real_ai_calls(monkeypatch):
     from config.settings import settings
 
     monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "")
+    monkeypatch.setattr(settings, "AI_API_KEY", "")

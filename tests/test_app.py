@@ -808,3 +808,175 @@ def test_reports_export_pdf(client, monkeypatch):
 def test_reports_export_unknown_format_returns_404(client, monkeypatch):
     response = _get_reports(client, "/reports/export/docx", monkeypatch)
     assert response.status_code == 404
+
+
+# ======================================================================
+# AI Analysis endpoints
+# ======================================================================
+def _fake_fetch_content(self, owner, repo, path, ref=""):
+    """Deterministic file content for static-analysis endpoint tests."""
+    if path.endswith(".py"):
+        return "import os\n\n\ndef run(x):\n    return x\n"
+    return "// javascript\nconst a = 1;\n"
+
+
+def _session_with_repo(client):
+    with client.session_transaction() as sess:
+        sess["github_token"] = "t"
+        sess["github_user"] = "alice"
+        sess["selected_repo"] = "o/r"
+
+
+def test_api_ai_errors_returns_list(client):
+    _session_with_repo(client)
+    response = client.get("/api/ai/errors")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert "errors" in payload
+    assert "total" in payload
+    assert "static_analyzed_at" in payload
+
+
+def test_api_ai_status_reports_counts(client):
+    _session_with_repo(client)
+    response = client.get("/api/ai/status")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert "ai_enabled" in payload
+    assert "error_counts" in payload
+    assert "error_total" in payload
+    assert "poll_interval" in payload
+
+
+def test_api_ai_fix_preview_requires_path(client):
+    _session_with_repo(client)
+    response = client.post("/api/ai/fix/preview", json={})
+    assert response.status_code == 400
+
+
+def test_api_ai_fix_preview_returns_diff(client, monkeypatch):
+    monkeypatch.setattr(GitHubAPI, "fetch_file_content", _fake_fetch_content)
+    monkeypatch.setattr(
+        GitHubAPI, "get_default_branch", lambda self, o, r: "main"
+    )
+    _session_with_repo(client)
+    response = client.post("/api/ai/fix/preview", json={"path": "src/app.py"})
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["path"] == "src/app.py"
+    assert "analysis" in payload
+    assert "has_fixed_code" in payload
+    assert "diff" in payload
+    assert "diff_lines" in payload
+
+
+def test_api_ai_fix_rollback_rejects_non_ai_fix_branch(client):
+    _session_with_repo(client)
+    response = client.post("/api/ai/fix/rollback", json={"branch": "main"})
+    assert response.status_code == 400
+    assert "Refusing" in response.get_json()["error"]
+
+
+def test_api_ai_fix_rollback_deletes_ai_fix_branch(client, monkeypatch):
+    deleted = []
+
+    def fake_delete(self, owner, repo, branch):
+        deleted.append(branch)
+        return True
+
+    monkeypatch.setattr(GitHubAPI, "delete_branch", fake_delete)
+    _session_with_repo(client)
+    response = client.post("/api/ai/fix/rollback", json={"branch": "ai-fix/null-check-1698000000"})
+    assert response.status_code == 200
+    assert response.get_json()["ok"] is True
+    assert deleted == ["ai-fix/null-check-1698000000"]
+
+
+def test_api_ai_fix_rollback_requires_branch(client):
+    _session_with_repo(client)
+    response = client.post("/api/ai/fix/rollback", json={})
+    assert response.status_code == 400
+
+
+def _ai_report():
+    """A report that exercises commit + member + static analysis paths."""
+    return {
+        "overview": {
+            "members": 2,
+            "active_members": 1,
+            "inactive_members": 0,
+            "total_commits": 5,
+            "open_prs": 1,
+            "merged_prs": 0,
+            "open_issues": 0,
+        },
+        "members": [
+            {"username": "alice", "commits": 4, "pr_count": 1, "last_active_days": 1},
+            {"username": "bob", "commits": 1, "pr_count": 0, "last_active_days": 10},
+        ],
+        "pushes": [
+            {
+                "message": "Add parser",
+                "sha": "abc123",
+                "author": "alice",
+                "date": "2024-01-01T00:00:00Z",
+                "files": [{"filename": "src/app.py", "additions": 5, "deletions": 1}],
+                "stats": {"additions": 5, "deletions": 1},
+            }
+        ],
+        "pull_requests": [],
+        "issues": [],
+        "languages": {"Python": 100},
+        "repo": {
+            "name": "o/r", "description": "", "stars": 0, "forks": 0,
+            "open_issues": 0, "default_branch": "main",
+        },
+        "activity_feed": [],
+    }
+
+
+def test_api_ai_analyze_repo_returns_deep_analysis(client, monkeypatch):
+    monkeypatch.setattr(GitHubAPI, "build_team_report", lambda self, o, r: _ai_report())
+    monkeypatch.setattr(GitHubAPI, "fetch_file_content", _fake_fetch_content)
+    monkeypatch.setattr(
+        GitHubAPI, "get_default_branch", lambda self, o, r: "main"
+    )
+    _session_with_repo(client)
+    response = client.post("/api/ai/analyze-repo", json={})
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert "health_score" in payload
+    assert "health_label" in payload
+    assert isinstance(payload["commit_analyses"], list)
+    assert payload["commit_analyses"][0]["sha"] == "abc123"
+    assert isinstance(payload["member_analyses"], list)
+    assert payload["member_analyses"][0]["username"] == "alice"
+    assert "code_stats" in payload
+    assert "last_analyzed" in payload
+
+
+def test_api_dashboard_refresh_returns_json(client, monkeypatch):
+    monkeypatch.setattr(GitHubAPI, "build_team_report", lambda self, o, r: _ai_report())
+    monkeypatch.setattr(GitHubAPI, "fetch_file_content", _fake_fetch_content)
+    monkeypatch.setattr(
+        GitHubAPI, "get_default_branch", lambda self, o, r: "main"
+    )
+    _session_with_repo(client)
+    response = client.post("/api/dashboard/refresh")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert "last_updated" in payload
+    assert payload["overview"]["total_commits"] == 5
+    assert "ai" in payload
+    assert payload["ai"]["health_label"] in (
+        "Excellent", "Good", "Needs Attention", "Critical",
+    )
+    assert "static_findings" in payload["ai"]
+    assert payload["languages"] == {"Python": 100}
+    assert client.application.extensions["last_updated"] == payload["last_updated"]
+    # error_counts must be present so dashboard.js can update the stat cards.
+    assert "error_counts" in payload["ai"]
+    assert "ai_errors" in payload["ai"]["error_counts"]
+    assert "ai_fixed_count" in payload["ai"]["error_counts"]
+    assert payload["ai"]["error_counts"]["static_errors"] >= 0

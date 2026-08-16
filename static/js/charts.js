@@ -2,6 +2,9 @@
    GitPulse - Chart.js renderers
    Reads data from data-* attributes on the canvas elements so the
    templates stay clean and free of inline script data.
+
+   Charts are registered in window.GitPulseCharts so the dashboard
+   can update them in place after an AJAX refresh (no reload).
    ============================================================ */
 (function () {
     "use strict";
@@ -20,23 +23,85 @@
         "#4aa8ff", "#9b6cff", "#2ecc9c", "#e67e22", "#f1c40f",
     ];
 
+    // ---------- Chart registry (for AJAX refresh) ----------
+    const registry = {};
+    window.GitPulseCharts = {
+        charts: registry,
+
+        // Update an existing chart's data in place and re-render it.
+        update: function (name, data) {
+            const chart = registry[name];
+            if (!chart) return false;
+            if (data.labels !== undefined) {
+                chart.data.labels = data.labels || [];
+            }
+            if (data.values !== undefined && chart.data.datasets && chart.data.datasets.length) {
+                chart.data.datasets[0].data = data.values || [];
+            }
+            if (data.active !== undefined && data.inactive !== undefined && chart.data.datasets && chart.data.datasets.length) {
+                chart.data.datasets[0].data = [data.active || 0, data.inactive || 0];
+            }
+            chart.update();
+            return true;
+        },
+
+        // Show the "empty" placeholder for a chart container.
+        showEmpty: function (name) {
+            const chart = registry[name];
+            if (!chart) return;
+            const canvas = chart.canvas;
+            if (canvas) {
+                const parent = canvas.parentNode;
+                if (parent) {
+                    const empty = parent.querySelector(".chart-empty");
+                    if (empty) empty.classList.add("show");
+                }
+            }
+        },
+
+        // Hide the "empty" placeholder for a chart container.
+        hideEmpty: function (name) {
+            const chart = registry[name];
+            if (!chart) return;
+            const canvas = chart.canvas;
+            if (canvas) {
+                const parent = canvas.parentNode;
+                if (parent) {
+                    const empty = parent.querySelector(".chart-empty");
+                    if (empty) empty.classList.remove("show");
+                }
+            }
+        },
+    };
+
+    function register(name, canvas, chart) {
+        if (!canvas || !chart) return;
+        registry[name] = chart;
+        // Keep the canvas element discoverable by name for tests.
+        canvas.setAttribute("data-chart-name", name);
+    }
+
+    function parseJson(attr, fallback) {
+        try {
+            const value = JSON.parse(attr || "null");
+            return Array.isArray(value) ? value : fallback;
+        } catch (err) {
+            console.error("GitPulse: bad chart data", err);
+            return fallback;
+        }
+    }
+
     // ---------- Languages doughnut ----------
     const langCanvas = document.getElementById("languagesChart");
     if (langCanvas) {
-        let labels = [];
-        let values = [];
-        try {
-            labels = JSON.parse(langCanvas.dataset.labels || "[]");
-            values = JSON.parse(langCanvas.dataset.values || "[]");
-        } catch (err) {
-            console.error("GitPulse: bad language chart data", err);
-        }
+        const labels = parseJson(langCanvas.dataset.labels, []);
+        const values = parseJson(langCanvas.dataset.values, []);
 
         if (values.length === 0) {
             const empty = document.getElementById("langEmpty");
             if (empty) empty.classList.add("show");
         } else {
-            new Chart(langCanvas, {
+            register("languages", langCanvas, new Chart(langCanvas, {
                 type: "doughnut",
                 data: {
                     labels: labels,
@@ -60,24 +125,18 @@
                         },
                     },
                 },
-            });
+            }));
         }
     }
 
     // ---------- Commits per member bar ----------
     const commitsCanvas = document.getElementById("commitsChart");
     if (commitsCanvas) {
-        let labels = [];
-        let values = [];
-        try {
-            labels = JSON.parse(commitsCanvas.dataset.labels || "[]");
-            values = JSON.parse(commitsCanvas.dataset.values || "[]");
-        } catch (err) {
-            console.error("GitPulse: bad commits chart data", err);
-        }
+        const labels = parseJson(commitsCanvas.dataset.labels, []);
+        const values = parseJson(commitsCanvas.dataset.values, []);
 
         if (values.length > 0) {
-            new Chart(commitsCanvas, {
+            register("commits", commitsCanvas, new Chart(commitsCanvas, {
                 type: "bar",
                 data: {
                     labels: labels,
@@ -102,24 +161,18 @@
                         legend: { display: false },
                     },
                 },
-            });
+            }));
         }
     }
 
     // ---------- Activity score per member bar ----------
     const scoreCanvas = document.getElementById("scoreChart");
     if (scoreCanvas) {
-        let labels = [];
-        let values = [];
-        try {
-            labels = JSON.parse(scoreCanvas.dataset.labels || "[]");
-            values = JSON.parse(scoreCanvas.dataset.values || "[]");
-        } catch (err) {
-            console.error("GitPulse: bad score chart data", err);
-        }
+        const labels = parseJson(scoreCanvas.dataset.labels, []);
+        const values = parseJson(scoreCanvas.dataset.values, []);
 
         if (values.length > 0) {
-            new Chart(scoreCanvas, {
+            register("score", scoreCanvas, new Chart(scoreCanvas, {
                 type: "bar",
                 data: {
                     labels: labels,
@@ -144,7 +197,7 @@
                         legend: { display: false },
                     },
                 },
-            });
+            }));
         }
     }
 
@@ -160,7 +213,7 @@
         if (active + inactive === 0) {
             if (empty) empty.classList.add("show");
         } else {
-            new Chart(statusCanvas, {
+            register("status", statusCanvas, new Chart(statusCanvas, {
                 type: "doughnut",
                 data: {
                     labels: labels,
@@ -182,24 +235,18 @@
                         },
                     },
                 },
-            });
+            }));
         }
     }
 
     // ---------- Team Reports: commits per member bar ----------
     const reportsCommitsCanvas = document.getElementById("reportsCommitsChart");
     if (reportsCommitsCanvas) {
-        let labels = [];
-        let values = [];
-        try {
-            labels = JSON.parse(reportsCommitsCanvas.dataset.labels || "[]");
-            values = JSON.parse(reportsCommitsCanvas.dataset.values || "[]");
-        } catch (err) {
-            console.error("GitPulse: bad reports commits chart data", err);
-        }
+        const labels = parseJson(reportsCommitsCanvas.dataset.labels, []);
+        const values = parseJson(reportsCommitsCanvas.dataset.values, []);
 
         if (values.length > 0) {
-            new Chart(reportsCommitsCanvas, {
+            register("reports-commits", reportsCommitsCanvas, new Chart(reportsCommitsCanvas, {
                 type: "bar",
                 data: {
                     labels: labels,
@@ -222,7 +269,7 @@
                     },
                     plugins: { legend: { display: false } },
                 },
-            });
+            }));
         } else {
             const empty = document.getElementById("reportsCommitsEmpty");
             if (empty) empty.classList.add("show");
@@ -232,17 +279,11 @@
     // ---------- Team Reports: activity score per member bar ----------
     const reportsScoreCanvas = document.getElementById("reportsScoreChart");
     if (reportsScoreCanvas) {
-        let labels = [];
-        let values = [];
-        try {
-            labels = JSON.parse(reportsScoreCanvas.dataset.labels || "[]");
-            values = JSON.parse(reportsScoreCanvas.dataset.values || "[]");
-        } catch (err) {
-            console.error("GitPulse: bad reports score chart data", err);
-        }
+        const labels = parseJson(reportsScoreCanvas.dataset.labels, []);
+        const values = parseJson(reportsScoreCanvas.dataset.values, []);
 
         if (values.length > 0) {
-            new Chart(reportsScoreCanvas, {
+            register("reports-score", reportsScoreCanvas, new Chart(reportsScoreCanvas, {
                 type: "bar",
                 data: {
                     labels: labels,
@@ -265,7 +306,7 @@
                     },
                     plugins: { legend: { display: false } },
                 },
-            });
+            }));
         } else {
             const empty = document.getElementById("reportsScoreEmpty");
             if (empty) empty.classList.add("show");
@@ -275,17 +316,11 @@
     // ---------- Team Reports: weekly activity line ----------
     const reportsWeeklyCanvas = document.getElementById("reportsWeeklyChart");
     if (reportsWeeklyCanvas) {
-        let labels = [];
-        let values = [];
-        try {
-            labels = JSON.parse(reportsWeeklyCanvas.dataset.labels || "[]");
-            values = JSON.parse(reportsWeeklyCanvas.dataset.values || "[]");
-        } catch (err) {
-            console.error("GitPulse: bad reports weekly chart data", err);
-        }
+        const labels = parseJson(reportsWeeklyCanvas.dataset.labels, []);
+        const values = parseJson(reportsWeeklyCanvas.dataset.values, []);
 
         if (values.length > 0) {
-            new Chart(reportsWeeklyCanvas, {
+            register("reports-weekly", reportsWeeklyCanvas, new Chart(reportsWeeklyCanvas, {
                 type: "line",
                 data: {
                     labels: labels,
@@ -309,7 +344,7 @@
                     },
                     plugins: { legend: { display: false } },
                 },
-            });
+            }));
         } else {
             const empty = document.getElementById("reportsWeeklyEmpty");
             if (empty) empty.classList.add("show");
@@ -319,20 +354,14 @@
     // ---------- Member page language doughnut ----------
     const langMemberCanvas = document.getElementById("langMemberChart");
     if (langMemberCanvas) {
-        let labels = [];
-        let values = [];
-        try {
-            labels = JSON.parse(langMemberCanvas.dataset.labels || "[]");
-            values = JSON.parse(langMemberCanvas.dataset.values || "[]");
-        } catch (err) {
-            console.error("GitPulse: bad member language chart data", err);
-        }
+        const labels = parseJson(langMemberCanvas.dataset.labels, []);
+        const values = parseJson(langMemberCanvas.dataset.values, []);
 
         if (values.length === 0) {
             const empty = document.getElementById("langMemberEmpty");
             if (empty) empty.classList.add("show");
         } else {
-            new Chart(langMemberCanvas, {
+            register("lang-member", langMemberCanvas, new Chart(langMemberCanvas, {
                 type: "doughnut",
                 data: {
                     labels: labels,
@@ -356,7 +385,7 @@
                         },
                     },
                 },
-            });
+            }));
         }
     }
 })();

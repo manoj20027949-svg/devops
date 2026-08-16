@@ -20,8 +20,14 @@ dark glassmorphism dashboard.
 | 🚪 **Access control** | Restrict login to an `ALLOWED_GITHUB_USERS` allow-list. |
 | 📂 **Dynamic repository selection** | Each logged-in user picks any repository they can access; the choice is stored per session and drives every page. |
 | 📊 **Team dashboard** | Members, commits, PRs, issues, last activity, activity score. |
+| ↻ **Live dashboard refresh** | AJAX refresh + auto-poll (30 s default) update cards, charts and the activity feed without a page reload. |
 | ✨ **AI coaching** | Per-developer suggestions from Claude with rule-based fallback. |
 | 🛡️ **Security scanner** | Regex-based static scan (secrets, injection, bad patterns). |
+| 🔬 **Static code analyzer** | Deterministic AST/regex checks: Python syntax, undefined names, bad exception handling, unguarded `JSON.parse`/`fetch`, hard-coded secrets (masked). |
+| 📋 **Commit + member analysis** | Rule-based classification of commits (Normal/Risky/Bug-prone/Large/Suspicious) and per-member contribution share. |
+| 🔍 **Code error analysis** | Merges static findings, security-scan results and stored AI analyses, deduplicated and sorted by severity. |
+| 👁️ **Fix preview** | Generate the AI fix and review it as a read-only diff before opening any pull request. |
+| ⟲ **Fix rollback** | Delete an `ai-fix/` branch to roll back an unmerged AI fix attempt (guarded endpoint). |
 | 🧊 **Glassmorphism UI** | Dark theme, responsive, animated, zero inline CSS. |
 | 🧾 **Structured logging** | Separate logs for auth, GitHub API, scanner and app errors. |
 
@@ -59,7 +65,8 @@ github_team_monitor/
 │
 ├── utils/
 │   ├── github_api.py          # GitHub REST API wrapper + activity scoring
-│   ├── ai_analyzer.py         # Claude + rule-based coaching engine
+│   ├── ai_analyzer.py         # Claude + rule-based coaching engine, commit/member analysis
+│   ├── static_analyzer.py     # Deterministic AST/regex static code analyzer
 │   ├── code_scanner.py        # Regex static scanner (10 rules)
 │   └── auth.py                # OAuth setup, session guards, rate limiting
 │
@@ -143,6 +150,9 @@ Open http://localhost:5000
 | `GITHUB_REPO` | no | — | Optional bootstrap default; users pick their own repo after login. |
 | `ANTHROPIC_API_KEY` | no | — | If set, AI coaching uses Claude; otherwise rule-based. |
 | `ANTHROPIC_MODEL` | no | `claude-3-5-haiku-20241022` | Claude model identifier. |
+| `AI_API_KEY` | no | — | Provider-agnostic alias for the AI key; `ANTHROPIC_API_KEY` wins if both are set. |
+| `AI_MODEL` | no | — | Provider-agnostic alias for the AI model; `ANTHROPIC_MODEL` wins if both are set. |
+| `AI_POLL_INTERVAL_SECONDS` | no | `30` | How often the dashboard polls `/api/dashboard/refresh` (min 10). |
 | `LOG_LEVEL` | no | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
 | `LOG_DIR` | no | `logs` | Where log files are written. |
 | `RATE_LIMIT_MAX_ATTEMPTS` | no | `5` | Max PAT login attempts per IP per window. |
@@ -172,33 +182,44 @@ Token stored in signed session cookie
 Repository selection (top bar) ──► /api/github/repos (this account's repos)
    │                                 └─ POST /api/github/select-repo → stored in session
    ▼
-<<<<<<< HEAD
-Dashboard (/dashboard) ──loads──► GitHubAPI.build_team_report(selected repo)
-                                      ├─ contributors ─┐
-                                      ├─ commits 90d   ├──► member metrics + activity score
-                                      ├─ PRs (open/closed) ┘
+Dashboard (/dashboard) ──loads──► GitHubAPI.build_team_report(owner, repo)
+                                      ├─ collaborators ──────────────┐
+                                      ├─ team members  ──────────────┼──► member metrics + activity score
+                                      ├─ repo owner    ──────────────┘
+                                      ├─ commits (activity window)
+                                      ├─ PRs (open/merged/closed)
                                       ├─ issues
                                       └─ languages
-=======
-Dashboard (/dashboard) ──loads──► GitHubAPI.build_team_report()
-                                       ├─ collaborators ──────────────┐
-                                       ├─ team members  ──────────────┼──► member metrics + activity score
-                                       ├─ repo owner    ──────────────┘
-                                       ├─ commits 90d   (all-time total)
-                                       ├─ open PRs
-                                       ├─ open issues
-                                       └─ languages
->>>>>>> f14184d (Update GitPulse team activity dashboard)
+   │                                └─ ↻ Refresh / auto-poll → /api/dashboard/refresh (no reload)
    │
    ▼
 AI Suggestions ──► generate_suggestions(members)
-                      ├─ ANTHROPIC_API_KEY set? ──► Claude JSON coaching
-                      └─ else ─────────────────────► rule-based coaching
+                      ├─ AI_API_KEY set? ──► Claude JSON coaching
+                      └─ else ──────────────► rule-based coaching
+   │
+   ▼
+AI Analysis (/api/ai/analyze-repo)
+   ├─ Repository health score + findings (rule-based)
+   ├─ Commit classification (Normal/Risky/Bug-prone/Large/Suspicious)
+   ├─ Member contribution share (per-member, highest first)
+   └─ Static code analysis of files changed in recent commits
+   │
+   ▼
+Code Error Analysis (/api/ai/errors)
+   ├─ stored AI analyses ┐
+   ├─ security scan cache ├─► merged, deduplicated, sorted by severity
+   └─ fresh static findings ┘
    │
    ▼
 Security Scanner ──► POST /dashboard/scan
                       ├─ target=repo  ──► scan_github_repo() (git trees API)
                       └─ target=local ──► scan_path() (local source tree)
+   │
+   ▼
+AI Fix workflow
+   ├─ /api/ai/fix/preview  ──► read-only diff (nothing written)
+   ├─ /api/ai/fix-pr       ──► opens an ai-fix/… branch + PR
+   └─ /api/ai/fix/rollback ──► deletes an unmerged ai-fix/… branch (guarded)
 ```
 
 ---
@@ -311,6 +332,10 @@ stdout (so `docker logs` works):
 - [ ] Per-developer commit graphs
 - [ ] Slack / email weekly digest
 - [ ] Real SAST integration (Semgrep)
+- [x] Deterministic static code analyzer
+- [x] Commit + member contribution analysis
+- [x] AI fix preview (read-only diff) + guarded rollback
+- [x] AJAX dashboard refresh with auto-polling
 
 ---
 

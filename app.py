@@ -66,6 +66,15 @@ def create_app() -> Flask:
     # Simple in-process caches so we don't hammer the GitHub API or rescan
     # the whole repo on every dashboard refresh.
     app.extensions["scan_cache"] = {"data": None}
+    # Deterministic static-analysis findings on recently changed files.
+    app.extensions["static_analysis"] = {
+        "findings": [],
+        "summary": {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "TOTAL": 0},
+        "analyzed_at": None,
+    }
+    # Timestamps surfaced in the UI ("Last updated / Last AI analysis").
+    app.extensions["last_updated"] = None
+    app.extensions["last_analyzed"] = None
     # Persistent SQLite store for AI analyses, fix attempts, webhook events.
     app.extensions["store"] = get_store()
     # Recent webhook events (newest first) for the dashboard activity feed.
@@ -196,6 +205,196 @@ def _load_report_view() -> tuple[dict | None, str | None]:
     view = build_view(report, rng["since"], rng["until"], rng["label"], rng["period"])
     view["ai"] = build_ai_summary(view, rng["label"])
     return view, None
+
+
+def _utc_now_iso() -> str:
+    """Current UTC time as an ISO string for the Last-updated badge."""
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+MAX_CHANGED_FILES_FOR_ANALYSIS = 40
+
+
+def _static_analyze_changed_files(
+    api: GitHubAPI, owner: str, repo: str, report: dict
+) -> tuple[list[dict], dict]:
+    """
+    Deterministic static analysis of the files touched by recent commits.
+
+    Fetches each changed file from GitHub (through the shared HTTP cache) and
+    runs the AST/regex analyzer. Returns (findings, summary). Never raises:
+    individual file errors are skipped so a flaky file cannot kill the tab.
+    """
+    from utils import static_analyzer
+
+    touched: list[str] = []
+    seen: set[str] = set()
+    for push in report.get("pushes") or []:
+        for f in push.get("files") or []:
+            path = str(f.get("filename") or "").strip()
+            if path and path not in seen:
+                seen.add(path)
+                touched.append(path)
+    touched = touched[:MAX_CHANGED_FILES_FOR_ANALYSIS]
+
+    default_branch = None
+    findings: list[dict] = []
+    for path in touched:
+        ext = "." + path.rsplit(".", 1)[-1].lower() if "." in path else ""
+        if ext not in static_analyzer.ANALYZABLE_EXTENSIONS:
+            continue
+        if default_branch is None:
+            try:
+                default_branch = api.get_default_branch(owner, repo)
+            except GitHubError:
+                default_branch = "HEAD"
+        try:
+            content = api.fetch_file_content(owner, repo, path, ref=default_branch)
+        except (GitHubError, Exception):  # noqa: BLE001 - skip unreadable files
+            continue
+        findings.extend(static_analyzer.analyze_content(path, content))
+
+    findings.sort(key=static_analyzer.severity_sort_key)
+    return findings, static_analyzer.summarize(findings)
+
+
+def _ai_errors_payload(store, scan_findings: list[dict], static_findings: list[dict]) -> list[dict]:
+    """
+    Merge every source of error findings into one list for the frontend:
+
+      * stored AI/rule-based analyses (severity medium/high/critical)
+      * the security scan cache (regex findings)
+      * fresh static analysis findings on recently changed files
+
+    Each item exposes a uniform ``result``-style shape plus a source tag.
+    """
+    from utils.static_analyzer import merge_findings
+
+    stored = []
+    for a in store.list_analyses(limit=50):
+        if a["result"].get("severity") in ("high", "critical", "medium"):
+            stored.append(
+                {
+                    "id": a["id"],
+                    "created_at": a["created_at"],
+                    "kind": a["kind"],
+                    "target": a["target"],
+                    "author": a["author"],
+                    "result": a["result"],
+                }
+            )
+
+    scan_errors = [
+        {
+            "created_at": None,
+            "kind": "scan",
+            "target": f.get("filename"),
+            "author": None,
+            "result": {
+                "severity": str(f.get("severity") or "low").lower(),
+                "file": f.get("filename"),
+                "line": f.get("line_number", 0),
+                "error_type": f.get("rule_id"),
+                "problem": f.get("description"),
+                "explanation": f.get("description"),
+                "suggested_fix": f.get("recommendation"),
+                "engine": "scan",
+            },
+        }
+        for f in scan_findings
+        if str(f.get("severity") or "").lower() in ("critical", "high", "medium")
+    ]
+
+    static_errors = [
+        {
+            "created_at": None,
+            "kind": "static",
+            "target": f.get("file"),
+            "author": None,
+            "result": f,
+        }
+        for f in static_findings
+        if str(f.get("severity") or "").lower() in ("critical", "high", "medium")
+    ]
+
+    merged = merge_findings(
+        [s["result"] for s in stored],
+        [s["result"] for s in scan_errors],
+        [s["result"] for s in static_errors],
+    )
+    # Keep the per-source detail on top of the deduplicated set.
+    detail_by_key = {
+        (str(item["result"].get("error_type") or item["result"].get("rule_id") or ""),
+         str(item["result"].get("file") or item["result"].get("filename") or ""),
+         int(item["result"].get("line") or item["result"].get("line_number") or 0)): item
+        for item in stored + scan_errors + static_errors
+    }
+    payload = []
+    for finding in merged:
+        key = (
+            str(finding.get("error_type") or finding.get("rule_id") or ""),
+            str(finding.get("file") or finding.get("filename") or ""),
+            int(finding.get("line") or finding.get("line_number") or 0),
+        )
+        detail = detail_by_key.get(key) or {}
+        payload.append({"detail": detail, "finding": finding})
+    return payload
+
+
+def _fix_preview(api: GitHubAPI, owner: str, repo: str, path: str, ref: str = "") -> dict:
+    """
+    Generate a fix preview for one file WITHOUT changing anything.
+
+    Returns the analysis plus a unified diff between the original content
+    and the AI-proposed fixed content. Never writes to GitHub.
+    """
+    import difflib
+
+    from utils import static_analyzer
+
+    ref = ref.strip() or api.get_default_branch(owner, repo)
+    content = api.fetch_file_content(owner, repo, path, ref=ref)
+    analysis = ai_analyzer.analyze_code(path, content, context=f"{owner}/{repo}")
+    fixed_code = analysis.get("fixed_code") or ""
+
+    diff_text = ""
+    if fixed_code and fixed_code != content:
+        original_lines = content.splitlines()
+        fixed_lines = fixed_code.splitlines()
+        diff_text = "\n".join(
+            difflib.unified_diff(
+                original_lines,
+                fixed_lines,
+                fromfile=f"a/{path}",
+                tofile=f"b/{path}",
+                lineterm="",
+            )
+        )
+    # Also surface the deterministic static findings for context.
+    static_findings = []
+    ext = "." + path.rsplit(".", 1)[-1].lower() if "." in path else ""
+    if ext in static_analyzer.ANALYZABLE_EXTENSIONS:
+        static_findings = static_analyzer.analyze_content(path, content)
+
+    return {
+        "path": path,
+        "ref": ref,
+        "analysis": analysis,
+        "has_fixed_code": bool(fixed_code),
+        "fixed_code": fixed_code,
+        "diff": diff_text,
+        "diff_lines": len(diff_text.splitlines()) if diff_text else 0,
+        "static_findings": static_findings,
+        "note": "Preview only - nothing was modified on GitHub.",
+    }
+
+
+def _safe_ai_fix_branch(branch: str) -> bool:
+    """Only branches created by the AI-fix workflow may be rolled back."""
+    branch = (branch or "").strip()
+    return branch.startswith("ai-fix/") and "/" not in branch[len("ai-fix/"):]
 
 
 # ======================================================================
@@ -330,6 +529,7 @@ def register_routes(app: Flask) -> None:
         ai_analyses = store.list_analyses(limit=30)
         fix_attempts = store.list_fix_attempts(limit=30)
         recent_activity = list(app.extensions["recent_activity"])
+        static_analysis = app.extensions["static_analysis"]
 
         ai_errors_count = sum(
             1
@@ -354,6 +554,13 @@ def register_routes(app: Flask) -> None:
             ai_errors_count=ai_errors_count,
             ai_fixed_count=ai_fixed_count,
             webhook_configured=bool(settings.GITHUB_WEBHOOK_SECRET),
+            last_updated=app.extensions["last_updated"],
+            last_analyzed=app.extensions["last_analyzed"],
+            static_findings=static_analysis.get("findings") or [],
+            static_summary=static_analysis.get("summary")
+            or {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "TOTAL": 0},
+            static_analyzed_at=static_analysis.get("analyzed_at"),
+            poll_interval=settings.AI_POLL_INTERVAL_SECONDS,
         )
 
     # --- Dashboard refresh (re-fetch collaborators + activity) ------------
@@ -999,6 +1206,228 @@ def register_api_routes(app: Flask) -> None:
         ]
         return jsonify({"errors": analyses})
 
+    @app.route("/api/ai/errors")
+    @login_required
+    def api_ai_errors():
+        """
+        Aggregated error list: stored AI analyses + cached security scan
+        findings + fresh deterministic static findings on changed files.
+        Each entry carries a ``finding`` (normalized result) plus ``detail``
+        (the original source record) so the UI can show why/where.
+        """
+        store = app.extensions["store"]
+        scan_findings = app.extensions["scan_cache"].get("data") or []
+        static_findings = app.extensions["static_analysis"].get("findings") or []
+        payload = _ai_errors_payload(store, scan_findings, static_findings)
+        return jsonify(
+            {
+                "errors": payload,
+                "total": len(payload),
+                "static_analyzed_at": app.extensions["static_analysis"].get("analyzed_at"),
+            }
+        )
+
+    @app.route("/api/ai/status")
+    @login_required
+    def api_ai_status():
+        """Lightweight AI status for the frontend poller (cheap, no GitHub calls)."""
+        store = app.extensions["store"]
+        static_analysis = app.extensions["static_analysis"]
+        scan_findings = app.extensions["scan_cache"].get("data") or []
+        ai_analyses = store.list_analyses(limit=30)
+        fix_attempts = store.list_fix_attempts(limit=30)
+        errors = sum(
+            1
+            for a in ai_analyses
+            if a["result"].get("severity") in ("high", "critical", "medium")
+        )
+        scan_errors = sum(
+            1
+            for f in scan_findings
+            if str(f.get("severity") or "").lower() in ("critical", "high", "medium")
+        )
+        static_errors = sum(
+            1
+            for f in (static_analysis.get("findings") or [])
+            if str(f.get("severity") or "").lower() in ("critical", "high", "medium")
+        )
+        return jsonify(
+            {
+                "ai_enabled": settings.anthropic_configured,
+                "last_updated": app.extensions["last_updated"],
+                "last_analyzed": app.extensions["last_analyzed"],
+                "error_counts": {
+                    "ai_errors": errors,
+                    "scan_errors": scan_errors,
+                    "static_errors": static_errors,
+                },
+                "error_total": errors + scan_errors + static_errors,
+                "fix_attempts_created": sum(
+                    1 for f in fix_attempts if f.get("status") == "created"
+                ),
+                "analyses_count": len(ai_analyses),
+                "poll_interval": settings.AI_POLL_INTERVAL_SECONDS,
+            }
+        )
+
+    @app.route("/api/ai/fix/preview", methods=["POST"])
+    @login_required
+    def api_ai_fix_preview():
+        """
+        Preview an AI fix as a diff WITHOUT modifying anything.
+
+        Returns the analysis, the proposed fixed content and a unified diff.
+        No GitHub mutation happens here - the caller then decides to apply
+        the fix via /api/ai/fix-pr or to roll back.
+        """
+        data = request.get_json(silent=True) or {}
+        path = (data.get("path") or "").strip()
+        if not path:
+            return jsonify({"error": "A file path is required."}), 400
+        owner, repo = _current_repo()
+        if not owner or not repo:
+            return jsonify({"error": "No repository selected."}), 400
+        api = get_api()
+        try:
+            preview = _fix_preview(api, owner, repo, path, ref=(data.get("ref") or ""))
+        except GitHubError as exc:
+            return jsonify({"error": exc.message}), 400
+        return jsonify(preview)
+
+    @app.route("/api/ai/fix/rollback", methods=["POST"])
+    @login_required
+    def api_ai_fix_rollback():
+        """
+        Safely roll back an AI-fix attempt by deleting its feature branch.
+
+        Only ``ai-fix/<slug>-<timestamp>`` branches are accepted, so a
+        request can never touch the default branch or any other branch.
+        A rollback only makes sense before the PR is merged; once merged the
+        change is part of the default branch and must be reverted normally.
+        """
+        data = request.get_json(silent=True) or {}
+        branch = (data.get("branch") or "").strip()
+        if not branch:
+            return jsonify({"error": "A branch name is required."}), 400
+        if not _safe_ai_fix_branch(branch):
+            return jsonify(
+                {
+                    "error": (
+                        "Refusing to delete: only branches created by the AI-fix "
+                        "workflow (ai-fix/...) can be rolled back."
+                    )
+                }
+            ), 400
+        owner, repo = _current_repo()
+        if not owner or not repo:
+            return jsonify({"error": "No repository selected."}), 400
+        api = get_api()
+        try:
+            api.delete_branch(owner, repo, branch)
+        except GitHubError as exc:
+            code = 404 if exc.status_code == 404 else 400
+            return jsonify({"error": exc.message}), code
+        from config.logging_setup import get_logger
+
+        get_logger("app").info(
+            "AI-fix rollback: deleted branch %s in %s/%s by %s",
+            branch, owner, repo, session.get("github_user"),
+        )
+        return jsonify({"ok": True, "branch": branch, "message": f"Branch {branch} deleted."})
+
+    @app.route("/api/dashboard/refresh", methods=["POST"])
+    @login_required
+    def api_dashboard_refresh():
+        """
+        Full AJAX refresh: bust the GitHub HTTP cache, re-fetch the team
+        report, re-run static analysis of changed files and return fresh
+        JSON so the frontend can update cards, charts and the activity feed
+        WITHOUT a page reload.
+        """
+        from utils.github_api import clear_http_cache
+
+        clear_http_cache()
+        app.extensions["scan_cache"] = {"data": None}
+        app.extensions["recent_activity"] = list(
+            app.extensions["store"].list_webhook_events(limit=20)
+        )
+
+        report, error = _load_report()
+        if error or not report:
+            return jsonify({"error": error or "Could not refresh dashboard data."}), 400
+
+        app.extensions["last_updated"] = _utc_now_iso()
+
+        # Re-run static analysis so the error numbers are fresh too.
+        owner, repo = _current_repo()
+        try:
+            static_findings, static_summary = _static_analyze_changed_files(
+                get_api(), owner, repo, report
+            )
+        except Exception as exc:  # noqa: BLE001
+            from config.logging_setup import get_logger
+
+            get_logger("app").warning("Refresh static analysis skipped: %s", exc)
+            static_findings, static_summary = [], {
+                "CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "TOTAL": 0,
+            }
+        app.extensions["static_analysis"] = {
+            "findings": static_findings,
+            "summary": static_summary,
+            "analyzed_at": app.extensions["last_updated"],
+        }
+
+        analysis = ai_analyzer.analyze_repository(report, deep=True)
+        members = report.get("members") or []
+        return jsonify(
+            {
+                "ok": True,
+                "last_updated": app.extensions["last_updated"],
+                "repo": report.get("repo") or {},
+                "overview": report.get("overview") or {},
+                "languages": report.get("languages") or {},
+                "members": members,
+                "pushes": report.get("pushes") or [],
+                "activity_feed": report.get("activity_feed") or [],
+                "pull_requests": report.get("pull_requests") or [],
+                "issues": report.get("issues") or [],
+                "ai": {
+                    "enabled": settings.anthropic_configured,
+                    "health_score": analysis.get("health_score"),
+                    "health_label": analysis.get("health_label"),
+                    "summary": analysis.get("summary"),
+                    "findings": analysis.get("findings") or [],
+                    "commit_analyses": analysis.get("commit_analyses") or [],
+                    "member_analyses": analysis.get("member_analyses") or [],
+                    "last_analyzed": app.extensions["last_analyzed"],
+                    "static_summary": static_summary,
+                    "static_findings": static_findings,
+                    "error_counts": {
+                        "ai_errors": sum(
+                            1
+                            for a in app.extensions["store"].list_analyses(limit=30)
+                            if a["result"].get("severity") in ("high", "critical", "medium")
+                        ),
+                        "scan_errors": sum(
+                            1
+                            for f in (app.extensions["scan_cache"].get("data") or [])
+                            if str(f.get("severity") or "").lower() in ("critical", "high", "medium")
+                        ),
+                        "static_errors": sum(
+                            1
+                            for f in static_findings
+                            if str(f.get("severity") or "").lower() in ("critical", "high", "medium")
+                        ),
+                        "ai_fixed_count": sum(
+                            1
+                            for f in app.extensions["store"].list_fix_attempts(limit=30)
+                            if f.get("status") == "created"
+                        ),
+                    },
+                },
+            }
+        )
+
     @app.route("/api/ai/analyze", methods=["POST"])
     @login_required
     def api_ai_analyze():
@@ -1106,21 +1535,48 @@ def register_api_routes(app: Flask) -> None:
     @login_required
     def api_ai_analyze_repo():
         """
-        Repository-level health analysis + fix recommendations.
-
-        Rule-based by default (always available). When ANTHROPIC_API_KEY is
-        configured an AI narrative is added on top. Results are saved to
-        the store for the AI Fixes tab.
+        Full repository AI analysis: health score, commit classifications,
+        member contribution, static error analysis of changed files and
+        (when configured) an AI narrative. Results are saved to the store
+        and used by the AI Fixes tab. Never modifies the repository.
         """
         report, error = _load_report()
-        if error:
-            return jsonify({"error": error}), 400
-        result = ai_analyzer.analyze_repository(report)
+        if error or not report:
+            return jsonify({"error": error or "No repository data available."}), 400
+        result = ai_analyzer.analyze_repository(report, deep=True)
         if settings.anthropic_configured:
             narrative = ai_analyzer.analyze_repository_ai(report)
             if narrative:
                 result["ai_narrative"] = narrative
                 result["engine"] = "ai"
+
+        owner, repo = _current_repo()
+        try:
+            static_findings, static_summary = _static_analyze_changed_files(
+                get_api(), owner, repo, report
+            )
+        except Exception as exc:  # noqa: BLE001 - analysis must never crash the tab
+            from config.logging_setup import get_logger
+
+            get_logger("app").warning("Static analysis skipped for %s/%s: %s", owner, repo, exc)
+            static_findings, static_summary = [], {
+                "CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "TOTAL": 0,
+            }
+        result["static_findings"] = static_findings
+        result["code_stats"] = {
+            "files_analyzed": len(
+                {f.get("file") for f in static_findings if f.get("file")}
+            ),
+            "findings": static_summary,
+        }
+        result["last_analyzed"] = _utc_now_iso()
+
+        app.extensions["last_analyzed"] = result["last_analyzed"]
+        app.extensions["static_analysis"] = {
+            "findings": static_findings,
+            "summary": static_summary,
+            "analyzed_at": result["last_analyzed"],
+        }
         app.extensions["store"].save_analysis(
             "repo", report.get("repo") or f"{report.get('owner')}/{report.get('repo')}",
             result,

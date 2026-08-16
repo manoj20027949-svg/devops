@@ -607,6 +607,20 @@ body.modal-open-gp { overflow: hidden; }
     font-size: 1.35rem; font-weight: 800;
 }
 
+/* ---------- AI Fix preview diff ---------- */
+.gp-diff {
+    max-height: 340px; overflow: auto;
+    padding: 12px 14px;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid var(--glass-border);
+    border-radius: 10px;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.55;
+    white-space: pre;
+    color: var(--text-1);
+}
+
 /* ---------- Team Reports ---------- */
 .badge-rank {
     width: 28px; height: 28px;

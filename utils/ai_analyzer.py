@@ -178,8 +178,10 @@ class ClaudeAnalyzer:
     def __init__(self) -> None:
         import anthropic  # imported lazily so the fallback works without the SDK
 
-        self.client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-        self.model = settings.ANTHROPIC_MODEL
+        self.client = anthropic.Anthropic(
+            api_key=settings.AI_API_KEY or settings.ANTHROPIC_API_KEY
+        )
+        self.model = settings.AI_MODEL or settings.ANTHROPIC_MODEL
 
     def chat(self, system: str, prompt: str, max_tokens: int = 2000) -> Optional[str]:
         """
@@ -378,6 +380,197 @@ def _ai_result_or_none(prompt: str, system: str) -> Optional[dict]:
     if isinstance(payload, dict):
         return payload
     return None
+
+
+# ----------------------------------------------------------------------
+# Commit analysis (rule-based)
+# ----------------------------------------------------------------------
+# Files that trigger a "Risky" classification when touched.
+_SENSITIVE_FILE_HINTS = (
+    "auth", "secret", "credential", ".env", "config", "database", "db.",
+    "migration", "deploy", "dockerfile", "compose", "requirements",
+    "package-lock", "pom.xml", "build.gradle", "terraform", "k8s", "kube",
+)
+
+# Messages that suggest an urgent/hotfix change.
+_BUG_MARKERS = (
+    "fix", "hotfix", "bug", "crash", "broken", "revert", "error",
+    "urgent", "regression", "rollback",
+)
+# Messages that give almost no information.
+_GENERIC_MESSAGES = {
+    "update", "updates", "update files", "changes", "changed", "stuff",
+    "wip", "work in progress", "edit", "edits", "misc", "misc changes",
+    "cleanup", "cleaning", "fixes", "fixup", "adjust", "updated",
+    "no message", "delete", "removed", "remove", "added", "add",
+    "rename", "refactor", "initial commit", "test", "testing",
+}
+
+_COMMIT_SEVERITY_ORDER = {
+    "Suspicious": 0,
+    "Bug-prone": 1,
+    "Large": 2,
+    "Risky": 3,
+    "Needs review": 4,
+    "Normal": 5,
+}
+
+
+def _commit_primary_category(flags: list[str]) -> str:
+    """Pick the most severe category from the collected flags."""
+    if not flags:
+        return "Normal"
+    return min(flags, key=lambda c: _COMMIT_SEVERITY_ORDER.get(c, 99))
+
+
+def classify_commit(commit: dict) -> dict:
+    """
+    Rule-based classification of a single commit.
+
+    Returns a dict with the commit identity plus a ``category`` from
+    (Suspicious, Bug-prone, Large, Risky, Needs review, Normal), a list of
+    human-readable ``reasons`` and a ``flagged`` boolean so the frontend can
+    highlight commits that need attention.
+    """
+    files = commit.get("files") or []
+    stats = commit.get("stats") or {}
+    additions = int(stats.get("additions") or 0)
+    deletions = int(stats.get("deletions") or 0)
+    message = (commit.get("message") or "").strip()
+    message_lower = message.lower()
+    author = (commit.get("author") or "").strip()
+    touched = [f.get("filename", "") for f in files if isinstance(f, dict)]
+
+    flags: list[str] = []
+    reasons: list[str] = []
+
+    # --- Large ---
+    total_lines = additions + deletions
+    if len(files) > 10 or total_lines >= 1000:
+        flags.append("Large")
+        reasons.append(
+            f"{len(files)} files / {total_lines} lines changed - hard to review"
+        )
+
+    # --- Suspicious ---
+    if not author or author.lower() in ("unknown", "null", "none"):
+        flags.append("Suspicious")
+        reasons.append("commit has no identifiable author")
+    if len(message) < 15 or message_lower in _GENERIC_MESSAGES:
+        flags.append("Suspicious")
+        reasons.append("commit message is empty or too generic to be useful")
+    if additions == 0 and deletions > 100:
+        flags.append("Suspicious")
+        reasons.append("large deletion-only change")
+
+    # --- Bug-prone ---
+    hit_bug_marker = any(m in message_lower for m in _BUG_MARKERS)
+    high_delete_ratio = deletions > 0 and (additions == 0 or deletions > additions)
+    if hit_bug_marker and (high_delete_ratio or len(touched) <= 3):
+        flags.append("Bug-prone")
+        reasons.append("message suggests an urgent fix; verify tests cover the change")
+
+    # --- Risky (sensitive files) ---
+    risky_touched = [f for f in touched if any(h in f.lower() for h in _SENSITIVE_FILE_HINTS)]
+    if risky_touched:
+        flags.append("Risky")
+        reasons.append(
+            "touches sensitive area(s): " + ", ".join(risky_touched[:3])
+        )
+
+    # --- Needs review ---
+    if 5 <= len(files) <= 10 or additions > 500 or deletions > 200:
+        flags.append("Needs review")
+        reasons.append(f"medium-sized change ({len(files)} files, {additions}+/{deletions}- lines)")
+
+    category = _commit_primary_category(flags)
+    return {
+        "sha": commit.get("sha", ""),
+        "author": author or "unknown",
+        "date": commit.get("date", ""),
+        "message": message or "(no message)",
+        "category": category,
+        "reasons": reasons,
+        "additions": additions,
+        "deletions": deletions,
+        "files_changed": len(files),
+        "flagged": category != "Normal",
+        "engine": "rule-based",
+    }
+
+
+def analyze_commits(pushes: list[dict]) -> list[dict]:
+    """
+    Analyze every commit in the report, flagged ones first (same category
+    severity ordering as the health findings).
+    """
+    analyzed = [classify_commit(p) for p in (pushes or [])]
+    analyzed.sort(key=lambda c: (not c["flagged"], _COMMIT_SEVERITY_ORDER.get(c["category"], 99)))
+    return analyzed
+
+
+# ----------------------------------------------------------------------
+# Member analysis (rule-based)
+# ----------------------------------------------------------------------
+def _activity_level(member: dict) -> str:
+    commits = int(member.get("commits") or 0)
+    last_active = member.get("last_active_days")
+    if commits >= 15 and last_active is not None and last_active <= 7:
+        return "High activity"
+    if commits >= 5:
+        return "Moderate activity"
+    if last_active is not None and last_active > 14:
+        return "Low activity"
+    return "New or low activity"
+
+
+def analyze_member(member: dict, total_commits: int) -> dict:
+    """Single member analysis: contribution share + plain-language summary."""
+    username = member.get("username", "unknown")
+    commits = int(member.get("commits") or 0)
+    contribution = round((commits / total_commits) * 100, 1) if total_commits else 0.0
+    level = _activity_level(member)
+    last_active = member.get("last_active_days")
+
+    summary = f"{level} - {username}"
+    detail = f"{commits} commit(s) in the analyzed window"
+    if last_active is not None:
+        detail += f", last active {last_active} day(s) ago"
+    if contribution:
+        detail += f", {contribution}% of team commits"
+
+    return {
+        "username": username,
+        "commits": commits,
+        "contribution_pct": contribution,
+        "activity_level": level,
+        "last_active_days": last_active,
+        "summary": summary,
+        "detail": detail,
+        "engine": "rule-based",
+    }
+
+
+def analyze_members(members: list[dict]) -> list[dict]:
+    """Analyze all members, sorted by contribution (highest first)."""
+    total_commits = sum(int(m.get("commits") or 0) for m in (members or []))
+    analyzed = [analyze_member(m, total_commits) for m in (members or [])]
+    analyzed.sort(key=lambda m: m["contribution_pct"], reverse=True)
+    return analyzed
+
+
+# ----------------------------------------------------------------------
+# Health category
+# ----------------------------------------------------------------------
+def health_category(score: int) -> str:
+    """Map a 0-100 health score to a readable label."""
+    if score >= 90:
+        return "Excellent"
+    if score >= 70:
+        return "Good"
+    if score >= 45:
+        return "Needs Attention"
+    return "Critical"
 
 
 # ----------------------------------------------------------------------
@@ -602,11 +795,15 @@ def analyze_issue(issue: dict) -> dict:
 # ----------------------------------------------------------------------
 # Repository-level analysis (AI Error Detection / Fix recommendations)
 # ----------------------------------------------------------------------
-def analyze_repository(report: dict) -> dict:
+def analyze_repository(report: dict, deep: bool = False) -> dict:
     """
     Rule-based health analysis for the whole repository. Always available
     (zero dependencies) and produces a uniform list of findings plus an
     overall health score. Used by the AI Analysis and AI Fixes tabs.
+
+    When ``deep`` is True, also attaches ``health_label``, ``commit_analyses``
+    and ``member_analyses`` so the frontend can render the full AI Analysis
+    dashboard without extra round-trips.
     """
     findings: list[dict] = []
     overview = report.get("overview") or {}
@@ -773,13 +970,20 @@ def analyze_repository(report: dict) -> dict:
     if not findings:
         health_score = 100
 
-    return {
+    result: dict = {
         "health_score": health_score,
+        "health_label": health_category(health_score),
         "summary": _health_summary(health_score, len(findings)),
         "findings": findings,
         "engine": "rule-based",
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+    if deep:
+        result["commit_analyses"] = analyze_commits(pushes)
+        result["member_analyses"] = analyze_members(members)
+
+    return result
 
 
 def _health_summary(score: int, finding_count: int) -> str:

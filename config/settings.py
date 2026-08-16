@@ -96,6 +96,26 @@ class Settings:
             "ANTHROPIC_MODEL", "claude-3-5-haiku-20241022"
         )
 
+        # --- Generic AI provider (optional alias) ---
+        # AI_API_KEY / AI_MODEL are provider-agnostic aliases. When the
+        # ANTHROPIC_* variables are set they win, so existing deployments
+        # keep working unchanged. Never hardcode a key here - the value is
+        # read from the environment only.
+        self.AI_API_KEY: str = (
+            os.getenv("AI_API_KEY", "").strip()
+            or os.getenv("ANTHROPIC_API_KEY", "").strip()
+        )
+        self.AI_MODEL: str = (
+            os.getenv("AI_MODEL", "").strip()
+            or os.getenv("ANTHROPIC_MODEL", "claude-3-5-haiku-20241022").strip()
+        )
+
+        # --- Dashboard auto-refresh (seconds) ---
+        # How often the frontend polls /api/dashboard/refresh for fresh data.
+        self.AI_POLL_INTERVAL_SECONDS: int = max(
+            10, int(os.getenv("AI_POLL_INTERVAL_SECONDS", "30"))
+        )
+
         # --- Logging ---
         self.LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
         self.LOG_DIR: str = os.getenv("LOG_DIR", "logs")
@@ -123,8 +143,18 @@ class Settings:
 
     @property
     def anthropic_configured(self) -> bool:
-        """True when an Anthropic API key is available."""
-        return bool(self.ANTHROPIC_API_KEY)
+        """True when any AI provider API key is available.
+
+        Kept under the historical `anthropic_*` name so existing templates
+        and call sites keep working, but it now also reflects the generic
+        ``AI_API_KEY`` alias.
+        """
+        return bool(self.ANTHROPIC_API_KEY or self.AI_API_KEY)
+
+    @property
+    def ai_configured(self) -> bool:
+        """True when an AI provider API key is available (alias)."""
+        return self.anthropic_configured
 
     @staticmethod
     def _looks_like_placeholder(value: str) -> bool:

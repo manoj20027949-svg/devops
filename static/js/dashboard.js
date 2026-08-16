@@ -69,33 +69,194 @@
         });
     });
 
-    // ---------- Refresh (AJAX) ----------
+    // ---------- Refresh (AJAX, no page reload) ----------
+    var lastUpdatedBadge = document.getElementById("lastUpdatedBadge");
+
+    function setStatValue(name, value) {
+        var el = document.querySelector('[data-refresh="' + name + '"]');
+        if (el) el.textContent = String(value);
+    }
+
+    function updateOverview(overview) {
+        if (!overview) return;
+        setStatValue("members", overview.members || 0);
+        setStatValue("active_members", overview.active_members || 0);
+        setStatValue("inactive_members", overview.inactive_members || 0);
+        setStatValue("total_commits", overview.total_commits || 0);
+        setStatValue("open_prs", overview.open_prs || 0);
+        setStatValue("merged_prs", overview.merged_prs || 0);
+        setStatValue("total_prs", overview.total_prs || 0);
+        setStatValue("open_issues", overview.open_issues || 0);
+        setStatValue("contributors_count", overview.contributors_count || 0);
+        setStatValue(
+            "lines_changed",
+            "+" + (overview.total_additions || 0) + " / −" + (overview.total_deletions || 0)
+        );
+    }
+
+    function updateAiStats(ai) {
+        if (!ai) return;
+        if (ai.error_counts) {
+            setStatValue("ai_errors_count", ai.error_counts.ai_errors || 0);
+            setStatValue("ai_fixed_count", ai.error_counts.ai_fixed_count || 0);
+        }
+        if (ai.static_summary) {
+            setStatValue("static_critical", ai.static_summary.CRITICAL || 0);
+            setStatValue("static_high", ai.static_summary.HIGH || 0);
+            setStatValue("static_medium", ai.static_summary.MEDIUM || 0);
+            setStatValue("static_low", ai.static_summary.LOW || 0);
+        }
+    }
+
+    function updateCharts(payload) {
+        var charts = window.GitPulseCharts;
+        if (!charts) return;
+        if (payload.languages) {
+            charts.update("languages", {
+                labels: Object.keys(payload.languages),
+                values: Object.keys(payload.languages).map(function (k) { return payload.languages[k]; }),
+            });
+        }
+        if (payload.overview) {
+            charts.update("status", {
+                active: payload.overview.active_members || 0,
+                inactive: payload.overview.inactive_members || 0,
+            });
+        }
+        if (payload.members) {
+            charts.update("commits", {
+                labels: payload.members.map(function (m) { return m.username; }),
+                values: payload.members.map(function (m) { return m.commits || 0; }),
+            });
+            charts.update("score", {
+                labels: payload.members.map(function (m) { return m.username; }),
+                values: payload.members.map(function (m) { return m.activity_score || 0; }),
+            });
+        }
+    }
+
+    function updateActivityFeed(events) {
+        var feed = document.getElementById("activityFeed");
+        var count = document.getElementById("activityCount");
+        if (!feed) return;
+        events = events || [];
+        if (count) count.textContent = String(events.length);
+        if (events.length === 0) {
+            feed.innerHTML = '<p class="muted p-3 mb-0">No activity in the selected period.</p>';
+            return;
+        }
+        feed.innerHTML = events.map(function (ev) {
+            var iconClass = ev.type === "push" ? "ic-green"
+                : (ev.type === "pull_request" ? "ic-purple" : "ic-orange");
+            var icon = ev.type === "push" ? "⌥"
+                : (ev.type === "pull_request" ? "⇄" : "◎");
+            var link = ev.url
+                ? '<a class="ext-link" href="' + esc(ev.url) + '" target="_blank" rel="noopener" title="View on GitHub">↗</a>'
+                : "";
+            return '<div class="feed-item" data-category="' + esc(ev.category || ev.type) +
+                '" data-actor="' + esc(ev.actor || "") + '" data-search="' +
+                esc((ev.title || "") + " " + (ev.action || "")).toLowerCase() + '">' +
+                '<div class="feed-icon ' + iconClass + '">' + icon + "</div>" +
+                '<div class="feed-body">' +
+                '<div class="feed-title"><strong>@' + esc(ev.author) + "</strong>" +
+                '<span class="muted"> ' + esc(ev.action || "") + "</span> " + link + "</div>" +
+                '<div class="feed-meta">' + esc(ev.title || "") +
+                (ev.sha ? " · <code>" + esc(ev.sha) + "</code>" : "") +
+                '<span class="muted float-end">' + esc(ev.relative || (ev.date || "").slice(0, 10)) + "</span>" +
+                "</div></div></div>";
+        }).join("");
+        if (window.applyActivityFilters) window.applyActivityFilters();
+    }
+
+    function updateCommitTable(pushes) {
+        var body = document.getElementById("commitsBody");
+        var count = document.getElementById("commitCount");
+        if (!body) return;
+        pushes = pushes || [];
+        if (count) count.textContent = String(pushes.length);
+        if (pushes.length === 0) {
+            body.innerHTML = '<tr><td colspan="6" class="muted text-center py-4">No commits in the selected period.</td></tr>';
+            return;
+        }
+        body.innerHTML = pushes.map(function (p) {
+            var files = p.files || [];
+            var stats = p.stats || {};
+            return '<tr class="hover-row commit-row" data-commit-sha="' + esc(p.full_sha || p.sha) +
+                '" data-author="' + esc(p.author || "") + '" data-search="' +
+                esc((p.message || "") + " " + (p.sha || "")).toLowerCase() + '" title="Click to view commit details">' +
+                "<td><strong>@" + esc(p.author) + "</strong></td>" +
+                '<td class="find-desc">' + esc(p.message || "") + "</td>" +
+                '<td class="text-center">' + files.length + "</td>" +
+                '<td class="text-center"><span class="text-success">+' + (stats.additions || 0) +
+                '</span> <span class="text-danger">−' + (stats.deletions || 0) + "</span></td>" +
+                '<td class="muted">' + esc((p.date || "").slice(0, 16).replace("T", " ")) + "</td>" +
+                "<td><code>" + esc(p.sha) + "</code></td></tr>";
+        }).join("");
+    }
+
+    function refreshDashboard() {
+        var btn = document.getElementById("refreshBtn");
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = "Refreshing…";
+        }
+        fetch("/api/dashboard/refresh", { method: "POST" })
+            .then(function (resp) {
+                return resp.json().then(function (payload) {
+                    return { ok: resp.ok, payload: payload };
+                });
+            })
+            .then(function (res) {
+                var payload = res.payload || {};
+                if (!res.ok) {
+                    throw new Error(payload.error || "Refresh failed");
+                }
+                updateOverview(payload.overview);
+                updateAiStats({ static_summary: payload.ai && payload.ai.static_summary });
+                updateCharts(payload);
+                updateActivityFeed(payload.activity_feed);
+                updateCommitTable(payload.pushes);
+                setStatValue("ai_errors_count", (payload.ai && payload.ai.error_counts && payload.ai.error_counts.ai_errors) || 0);
+                setStatValue("ai_fixed_count", (payload.ai && payload.ai.error_counts && payload.ai.error_counts.ai_fixed_count) || 0);
+                if (lastUpdatedBadge && payload.last_updated) {
+                    lastUpdatedBadge.textContent = "Last updated " + String(payload.last_updated).slice(0, 16).replace("T", " ") + " UTC";
+                    lastUpdatedBadge.title = "When GitHub data was last fetched";
+                }
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = "✓ Refreshed";
+                    setTimeout(function () { btn.textContent = "↻ Refresh"; }, 1500);
+                }
+            })
+            .catch(function (err) {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = "↻ Refresh";
+                }
+                console.warn("Dashboard refresh failed:", err.message);
+            });
+    }
+
     var refreshBtn = document.getElementById("refreshBtn");
     if (refreshBtn) {
-        refreshBtn.addEventListener("click", function () {
-            refreshBtn.disabled = true;
-            refreshBtn.textContent = "Refreshing…";
-            fetch("/api/refresh", { method: "POST" })
-                .then(function (resp) {
-                    return resp.json().then(function (payload) {
-                        return { ok: resp.ok, payload: payload };
-                    });
-                })
-                .then(function (res) {
-                    if (!res.ok) {
-                        throw new Error((res.payload && res.payload.error) || "Refresh failed");
-                    }
-                    refreshBtn.textContent = "✓ Refreshed";
-                    setTimeout(function () {
-                        window.location.reload();
-                    }, 400);
-                })
-                .catch(function (err) {
-                    refreshBtn.disabled = false;
-                    refreshBtn.textContent = "↻ Refresh";
-                    alert("Could not refresh: " + err.message);
-                });
+        refreshBtn.addEventListener("click", refreshDashboard);
+    }
+
+    // ---------- Auto-refresh polling (30s default) ----------
+    var pollInterval = parseInt(window.GITPULSE_POLL_INTERVAL, 10) || 30;
+    function startAutoRefresh() {
+        var timer = window.setInterval(refreshDashboard, pollInterval * 1000);
+        // Pause polling while the tab is hidden to save bandwidth.
+        document.addEventListener("visibilitychange", function () {
+            if (document.hidden) {
+                window.clearInterval(timer);
+            } else {
+                timer = window.setInterval(refreshDashboard, pollInterval * 1000);
+            }
         });
+    }
+    if (window.location.pathname.indexOf("/dashboard") !== -1 || document.getElementById("refreshBtn")) {
+        startAutoRefresh();
     }
 
     // ---------- Activity filters (client-side) ----------
@@ -132,6 +293,7 @@
             searchInput._timer = window.setTimeout(applyActivityFilters, 250);
         });
     }
+    window.applyActivityFilters = applyActivityFilters;
 
     // ---------- Commits: filter + detail modal ----------
     var commitSearch = document.getElementById("commitSearch");
@@ -392,16 +554,37 @@
                         ? "<p class='muted'>" + esc(data.ai_narrative.narrative) + "</p>" +
                           (data.ai_narrative.priorities || []).map(function (p) { return "<li>" + esc(p) + "</li>"; }).join("")
                         : "";
+                    var codeStats = data.code_stats
+                        ? "<p class='muted small mb-1'><strong>Static code scan:</strong> " +
+                          esc(data.code_stats.files_analyzed) + " file(s) analyzed · " +
+                          esc(data.code_stats.findings.TOTAL) + " finding(s) (" +
+                          esc(data.code_stats.findings.CRITICAL) + " critical, " +
+                          esc(data.code_stats.findings.HIGH) + " high)</p>"
+                        : "";
                     repoAnalysisResult.innerHTML =
                         "<div class='glass card-pulse p-3 mb-3'>" +
                         "<div class='d-flex align-items-center gap-3 flex-wrap'>" +
                         "<div class='repo-health-score badge-status " + scoreColor + "'>" + score + "</div>" +
-                        "<div><strong>Health Score</strong><div class='muted'>" + esc(data.summary || "") + "</div></div>" +
+                        "<div><strong>Health Score</strong>" +
+                        (data.health_label ? " · <span class='badge badge-glass'>" + esc(data.health_label) + "</span>" : "") +
+                        "<div class='muted'>" + esc(data.summary || "") + "</div></div>" +
                         "</div>" +
                         (narrative ? "<div class='mt-2'><ul class='gp-list'>" + narrative + "</ul></div>" : "") +
+                        (codeStats ? "<div class='mt-2'>" + codeStats + "</div>" : "") +
                         "</div>" +
                         "<h3 class='h6'>Findings (" + esc((data.findings || []).length) + ")</h3>" +
                         (findings || '<p class="muted mb-0">No findings - repository looks healthy.</p>');
+                    var lastAnalyzed = document.getElementById("lastAnalyzedBadge");
+                    if (lastAnalyzed && data.last_analyzed) {
+                        lastAnalyzed.textContent = "Last analysis " + String(data.last_analyzed).slice(0, 16).replace("T", " ") + " UTC";
+                    }
+                    // Update the static error stat cards on this tab.
+                    if (data.code_stats) {
+                        setStatValue("static_critical", data.code_stats.findings.CRITICAL || 0);
+                        setStatValue("static_high", data.code_stats.findings.HIGH || 0);
+                        setStatValue("static_medium", data.code_stats.findings.MEDIUM || 0);
+                        setStatValue("static_low", data.code_stats.findings.LOW || 0);
+                    }
                 })
                 .catch(function () {
                     analyzeRepoBtn.disabled = false;
@@ -411,6 +594,284 @@
                 });
         });
     }
+
+    // ---------- Commit analysis ----------
+    var analyzeCommitsBtn = document.getElementById("analyzeCommitsBtn");
+    var commitAnalysisStatus = document.getElementById("commitAnalysisStatus");
+    var commitAnalysisResult = document.getElementById("commitAnalysisResult");
+
+    function renderCommitAnalyses(commitAnalyses) {
+        if (!commitAnalysisResult) return;
+        commitAnalyses = commitAnalyses || [];
+        if (commitAnalyses.length === 0) {
+            commitAnalysisResult.innerHTML = '<p class="muted mb-0">No commits to analyze.</p>';
+            return;
+        }
+        var categoryBadge = {
+            "Normal": "badge-glass",
+            "Risky": "st-open",
+            "Bug-prone": "st-closed",
+            "Large": "st-merged",
+            "Suspicious": "st-closed",
+            "Needs review": "st-merged",
+        };
+        commitAnalysisResult.innerHTML = commitAnalyses.map(function (c) {
+            var cls = categoryBadge[c.category] || "badge-glass";
+            var reasons = (c.reasons || []).map(function (r) {
+                return "<li>" + esc(r) + "</li>";
+            }).join("");
+            return "<div class='suggestion-card prio-" + (c.flagged ? "high" : "low") + " mb-2'>" +
+                "<div class='sugg-top'>" +
+                "<span class='badge " + cls + "'>" + esc(c.category) + "</span>" +
+                "<span class='muted small'>" + esc(c.sha || "").slice(0, 7) + " · @" + esc(c.author) +
+                (c.date ? " · " + esc((c.date || "").slice(0, 10)) : "") +
+                " · +" + esc(c.additions) + "/-" + esc(c.deletions) + " · " + esc(c.files_changed) + " file(s)</span>" +
+                "</div>" +
+                "<h3 class='h6 mb-1'>" + esc(c.message) + "</h3>" +
+                (reasons ? "<ul class='gp-list muted small mb-0'>" + reasons + "</ul>" : "") +
+                "</div>";
+        }).join("");
+    }
+
+    if (analyzeCommitsBtn) {
+        analyzeCommitsBtn.addEventListener("click", function () {
+            analyzeCommitsBtn.disabled = true;
+            analyzeCommitsBtn.textContent = "Analyzing…";
+            if (commitAnalysisStatus) commitAnalysisStatus.textContent = "Classifying commits…";
+            fetch("/api/ai/analyze-repo", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: "{}",
+            })
+                .then(function (resp) { return resp.json(); })
+                .then(function (data) {
+                    analyzeCommitsBtn.disabled = false;
+                    analyzeCommitsBtn.textContent = "Analyze Commits";
+                    if (commitAnalysisStatus) commitAnalysisStatus.textContent = "";
+                    if (data.error) {
+                        commitAnalysisResult.innerHTML = renderError(data.error);
+                        return;
+                    }
+                    renderCommitAnalyses(data.commit_analyses);
+                })
+                .catch(function () {
+                    analyzeCommitsBtn.disabled = false;
+                    analyzeCommitsBtn.textContent = "Analyze Commits";
+                    if (commitAnalysisStatus) commitAnalysisStatus.textContent = "";
+                    commitAnalysisResult.innerHTML = renderError("Network error while analyzing commits.");
+                });
+        });
+    }
+
+    // ---------- Member analysis ----------
+    var analyzeMembersBtn = document.getElementById("analyzeMembersBtn");
+    var memberAnalysisStatus = document.getElementById("memberAnalysisStatus");
+    var memberAnalysisResult = document.getElementById("memberAnalysisResult");
+
+    if (analyzeMembersBtn) {
+        analyzeMembersBtn.addEventListener("click", function () {
+            analyzeMembersBtn.disabled = true;
+            analyzeMembersBtn.textContent = "Analyzing…";
+            if (memberAnalysisStatus) memberAnalysisStatus.textContent = "Computing contribution share…";
+            fetch("/api/ai/analyze-repo", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: "{}",
+            })
+                .then(function (resp) { return resp.json(); })
+                .then(function (data) {
+                    analyzeMembersBtn.disabled = false;
+                    analyzeMembersBtn.textContent = "Analyze Members";
+                    if (memberAnalysisStatus) memberAnalysisStatus.textContent = "";
+                    if (data.error) {
+                        memberAnalysisResult.innerHTML = renderError(data.error);
+                        return;
+                    }
+                    var members = (data.member_analyses || []).map(function (m) {
+                        var width = Math.max(1, Math.min(100, Number(m.contribution_pct) || 0));
+                        return "<div class='mb-2'>" +
+                            "<div class='d-flex justify-content-between small'>" +
+                            "<strong>@" + esc(m.username) + "</strong>" +
+                            "<span class='muted'>" + esc(m.activity_level) + " · " + esc(m.contribution_pct) + "% · " + esc(m.commits) + " commit(s)</span>" +
+                            "</div>" +
+                            "<div class='score-bar'><div class='score-fill' style='width:" + width + "%'></div></div>" +
+                            "</div>";
+                    }).join("");
+                    memberAnalysisResult.innerHTML = members ||
+                        '<p class="muted mb-0">No members to analyze.</p>';
+                })
+                .catch(function () {
+                    analyzeMembersBtn.disabled = false;
+                    analyzeMembersBtn.textContent = "Analyze Members";
+                    if (memberAnalysisStatus) memberAnalysisStatus.textContent = "";
+                    memberAnalysisResult.innerHTML = renderError("Network error while analyzing members.");
+                });
+        });
+    }
+
+    // ---------- Error analysis (static + scan + stored) ----------
+    var analyzeErrorsBtn = document.getElementById("analyzeErrorsBtn");
+    var errorAnalysisStatus = document.getElementById("errorAnalysisStatus");
+    var errorAnalysisResult = document.getElementById("errorAnalysisResult");
+
+    function renderErrors(items) {
+        if (!errorAnalysisResult) return;
+        items = items || [];
+        if (items.length === 0) {
+            errorAnalysisResult.innerHTML = '<p class="muted mb-0">No errors found - code looks clean.</p>';
+            return;
+        }
+        errorAnalysisResult.innerHTML = items.map(function (item) {
+            var f = item.finding || item.result || {};
+            var detail = item.detail || {};
+            var source = detail.kind || f.engine || "analysis";
+            var target = detail.target || f.file || "";
+            var line = f.line || f.line_number || 0;
+            return "<div class='suggestion-card prio-" + esc(f.severity || "low") + " mb-2'>" +
+                "<div class='sugg-top'>" +
+                "<span class='badge badge-prio'>" + esc((f.severity || "low").toUpperCase()) + "</span>" +
+                "<span class='muted small'>" + esc(source) + (target ? " · " + esc(target) : "") +
+                (line ? " · line " + esc(line) : "") +
+                (detail.created_at ? " · " + esc(String(detail.created_at).slice(0, 16).replace("T", " ")) : "") +
+                "</span></div>" +
+                "<h3 class='h6 mb-1'>" + esc(f.problem || f.description || "") + "</h3>" +
+                (f.explanation ? "<p class='sugg-detail muted mb-0'>" + esc(f.explanation) + "</p>" : "") +
+                (f.suggested_fix ? "<p class='sugg-detail muted mb-0'><strong>Fix:</strong> " + esc(f.suggested_fix) + "</p>" : "") +
+                (f.error_type || f.rule_id ? "<small class='muted'>" + esc(f.error_type || f.rule_id) + "</small>" : "") +
+                "</div>";
+        }).join("");
+    }
+
+    if (analyzeErrorsBtn) {
+        analyzeErrorsBtn.addEventListener("click", function () {
+            analyzeErrorsBtn.disabled = true;
+            analyzeErrorsBtn.textContent = "Analyzing…";
+            if (errorAnalysisStatus) errorAnalysisStatus.textContent = "Merging static, scan and stored findings…";
+            fetch("/api/ai/errors")
+                .then(function (resp) { return resp.json(); })
+                .then(function (data) {
+                    analyzeErrorsBtn.disabled = false;
+                    analyzeErrorsBtn.textContent = "Run Error Analysis";
+                    if (errorAnalysisStatus) errorAnalysisStatus.textContent = "";
+                    if (data.error) {
+                        errorAnalysisResult.innerHTML = renderError(data.error);
+                        return;
+                    }
+                    renderErrors(data.errors);
+                    if (data.total !== undefined) {
+                        setStatValue("ai_errors_count", data.total);
+                    }
+                })
+                .catch(function () {
+                    analyzeErrorsBtn.disabled = false;
+                    analyzeErrorsBtn.textContent = "Run Error Analysis";
+                    if (errorAnalysisStatus) errorAnalysisStatus.textContent = "";
+                    errorAnalysisResult.innerHTML = renderError("Network error while running error analysis.");
+                });
+        });
+    }
+
+    // ---------- AI Fix preview (read-only diff) ----------
+    var aiPreviewForm = document.getElementById("aiPreviewForm");
+    var aiPreviewResult = document.getElementById("aiPreviewResult");
+
+    if (aiPreviewForm) {
+        aiPreviewForm.addEventListener("submit", function (event) {
+            event.preventDefault();
+            var pathInput = aiPreviewForm.querySelector('[name="path"]');
+            var path = (pathInput && pathInput.value.trim()) || "";
+            if (!path) return;
+            var btn = document.getElementById("aiPreviewBtn");
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = "Generating…";
+            }
+            aiPreviewResult.innerHTML = '<p class="muted mb-0">Generating fix preview (read-only)…</p>';
+            fetch("/api/ai/fix/preview", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ path: path }),
+            })
+                .then(function (resp) { return resp.json(); })
+                .then(function (data) {
+                    if (btn) {
+                        btn.disabled = false;
+                        btn.textContent = "Generate Preview";
+                    }
+                    if (data.error) {
+                        aiPreviewResult.innerHTML = renderError(data.error);
+                        return;
+                    }
+                    var analysis = data.analysis || {};
+                    var diffHtml = data.diff
+                        ? "<h3 class='h6 mt-2'>Proposed diff</h3>" +
+                          "<pre class='gp-diff'>" + esc(data.diff) + "</pre>"
+                        : "<p class='muted mb-0'>The analyzer did not propose code changes for this file.</p>";
+                    aiPreviewResult.innerHTML =
+                        "<div class='suggestion-card prio-" + esc(analysis.severity || "low") + " mb-2'>" +
+                        "<div class='sugg-top'>" +
+                        "<span class='badge badge-prio'>" + esc((analysis.severity || "low").toUpperCase()) + "</span>" +
+                        "<span class='muted small'>" + esc(data.path) + " · engine " + esc(analysis.engine || "") + "</span>" +
+                        "</div>" +
+                        "<h3 class='h6 mb-1'>" + esc(analysis.problem || "No issue detected") + "</h3>" +
+                        (analysis.explanation ? "<p class='sugg-detail muted mb-0'>" + esc(analysis.explanation) + "</p>" : "") +
+                        (analysis.suggested_fix ? "<p class='sugg-detail muted mb-0'><strong>Fix:</strong> " + esc(analysis.suggested_fix) + "</p>" : "") +
+                        "</div>" + diffHtml +
+                        "<p class='muted small mt-2 mb-0'>" + esc(data.note || "") + "</p>";
+                })
+                .catch(function () {
+                    if (btn) {
+                        btn.disabled = false;
+                        btn.textContent = "Generate Preview";
+                    }
+                    aiPreviewResult.innerHTML = renderError("Network error while generating the fix preview.");
+                });
+        });
+    }
+
+    // ---------- AI Fix rollback ----------
+    document.addEventListener("click", function (event) {
+        var btn = event.target.closest(".rollback-btn");
+        if (!btn) return;
+        var branch = btn.dataset.branch;
+        if (!branch) return;
+        var message = "Delete branch " + branch + "?\n\n" +
+            "This rolls back the AI fix: the branch is deleted and its pull request closes automatically. " +
+            "This only works before the PR is merged - merged changes must be reverted normally.";
+        if (!window.confirm(message)) return;
+        btn.disabled = true;
+        btn.textContent = "Deleting…";
+        fetch("/api/ai/fix/rollback", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ branch: branch }),
+        })
+            .then(function (resp) { return resp.json(); })
+            .then(function (data) {
+                if (data.error) {
+                    btn.disabled = false;
+                    btn.textContent = "⟲ Rollback";
+                    alert("Rollback failed: " + data.error);
+                    return;
+                }
+                btn.textContent = "✓ Deleted";
+                btn.classList.remove("btn-outline-danger");
+                btn.classList.add("btn-outline-success");
+                var row = btn.closest("tr");
+                if (row) {
+                    var statusCell = row.querySelector(".badge-status");
+                    if (statusCell) {
+                        statusCell.textContent = "rolled back";
+                        statusCell.className = "badge badge-status st-closed";
+                    }
+                }
+            })
+            .catch(function () {
+                btn.disabled = false;
+                btn.textContent = "⟲ Rollback";
+                alert("Network error while rolling back the branch.");
+            });
+    });
 
     // ---------- AI Fix form confirmation ----------
     var aiFixForm = document.getElementById("aiFixForm");

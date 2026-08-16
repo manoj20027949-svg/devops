@@ -4,7 +4,10 @@
 {% block badge %}{{ report.repo.name if report else 'no data' }}{% endblock %}
 
 {% block topbar_extra %}
-<button type="button" class="btn btn-pulse btn-sm" id="refreshBtn" title="Re-fetch collaborators, commits, PRs, issues and events from GitHub">↻ Refresh</button>
+<span class="badge badge-glass" id="lastUpdatedBadge" title="When GitHub data was last fetched">
+    {% if last_updated %}Last updated {{ last_updated[:16].replace('T', ' ') }} UTC{% else %}Not refreshed yet{% endif %}
+</span>
+<button type="button" class="btn btn-pulse btn-sm" id="refreshBtn" title="Re-fetch collaborators, commits, PRs, issues and events from GitHub without reloading the page">↻ Refresh</button>
 {% endblock %}
 
 {% block content %}
@@ -22,6 +25,7 @@
 {% else %}
 
 <script>window.GITPULSE_REPO = "{{ report.repo.name }}";</script>
+<script>window.GITPULSE_POLL_INTERVAL = {{ poll_interval|default(30) }};</script>
 
 <!-- ================================================================
      TAB 1: OVERVIEW
@@ -35,7 +39,7 @@
                 <div class="glass card-pulse stat-card">
                     <div class="stat-icon ic-blue">👥</div>
                     <div class="stat-body">
-                        <span class="stat-value">{{ report.overview.members }}</span>
+                        <span class="stat-value" data-refresh="members">{{ report.overview.members }}</span>
                         <span class="stat-label">Total Members</span>
                     </div>
                 </div>
@@ -46,7 +50,7 @@
                 <div class="glass card-pulse stat-card">
                     <div class="stat-icon ic-green">⚡</div>
                     <div class="stat-body">
-                        <span class="stat-value">{{ report.overview.active_members|default(0) }}</span>
+                        <span class="stat-value" data-refresh="active_members">{{ report.overview.active_members|default(0) }}</span>
                         <span class="stat-label">Active Members</span>
                     </div>
                 </div>
@@ -57,7 +61,7 @@
                 <div class="glass card-pulse stat-card">
                     <div class="stat-icon ic-orange">◎</div>
                     <div class="stat-body">
-                        <span class="stat-value">{{ report.overview.inactive_members|default(0) }}</span>
+                        <span class="stat-value" data-refresh="inactive_members">{{ report.overview.inactive_members|default(0) }}</span>
                         <span class="stat-label">Inactive Members</span>
                     </div>
                 </div>
@@ -68,7 +72,7 @@
                 <div class="glass card-pulse stat-card">
                     <div class="stat-icon ic-purple">✓</div>
                     <div class="stat-body">
-                        <span class="stat-value">{{ report.overview.total_commits }}</span>
+                        <span class="stat-value" data-refresh="total_commits">{{ report.overview.total_commits }}</span>
                         <span class="stat-label">Total Commits ({{ activity_window }}d)</span>
                     </div>
                 </div>
@@ -79,7 +83,7 @@
                 <div class="glass card-pulse stat-card">
                     <div class="stat-icon ic-blue">⇄</div>
                     <div class="stat-body">
-                        <span class="stat-value">{{ report.overview.open_prs }}</span>
+                        <span class="stat-value" data-refresh="open_prs">{{ report.overview.open_prs }}</span>
                         <span class="stat-label">Open Pull Requests</span>
                     </div>
                 </div>
@@ -90,7 +94,7 @@
                 <div class="glass card-pulse stat-card">
                     <div class="stat-icon ic-green">⇃</div>
                     <div class="stat-body">
-                        <span class="stat-value">{{ report.overview.merged_prs|default(0) }}</span>
+                        <span class="stat-value" data-refresh="merged_prs">{{ report.overview.merged_prs|default(0) }}</span>
                         <span class="stat-label">Merged Pull Requests</span>
                     </div>
                 </div>
@@ -101,7 +105,7 @@
                 <div class="glass card-pulse stat-card">
                     <div class="stat-icon ic-orange">◎</div>
                     <div class="stat-body">
-                        <span class="stat-value">{{ report.overview.open_issues }}</span>
+                        <span class="stat-value" data-refresh="open_issues">{{ report.overview.open_issues }}</span>
                         <span class="stat-label">Open Issues</span>
                     </div>
                 </div>
@@ -112,7 +116,7 @@
                 <div class="glass card-pulse stat-card">
                     <div class="stat-icon ic-red">✦</div>
                     <div class="stat-body">
-                        <span class="stat-value">{{ ai_errors_count }}</span>
+                        <span class="stat-value" data-refresh="ai_errors_count">{{ ai_errors_count }}</span>
                         <span class="stat-label">AI Detected Errors</span>
                     </div>
                 </div>
@@ -123,7 +127,7 @@
                 <div class="glass card-pulse stat-card">
                     <div class="stat-icon ic-green">✓</div>
                     <div class="stat-body">
-                        <span class="stat-value">{{ ai_fixed_count }}</span>
+                        <span class="stat-value" data-refresh="ai_fixed_count">{{ ai_fixed_count }}</span>
                         <span class="stat-label">AI Fixed Issues (PRs)</span>
                     </div>
                 </div>
@@ -134,7 +138,7 @@
                 <div class="glass card-pulse stat-card">
                     <div class="stat-icon ic-purple">⇃</div>
                     <div class="stat-body">
-                        <span class="stat-value">{{ report.overview.total_prs|default(0) }}</span>
+                        <span class="stat-value" data-refresh="total_prs">{{ report.overview.total_prs|default(0) }}</span>
                         <span class="stat-label">Total Pull Requests</span>
                     </div>
                 </div>
@@ -145,7 +149,7 @@
                 <div class="glass card-pulse stat-card">
                     <div class="stat-icon ic-blue">⑂</div>
                     <div class="stat-body">
-                        <span class="stat-value">{{ report.overview.contributors_count|default(0) }}</span>
+                        <span class="stat-value" data-refresh="contributors_count">{{ report.overview.contributors_count|default(0) }}</span>
                         <span class="stat-label">Contributors</span>
                     </div>
                 </div>
@@ -155,7 +159,7 @@
             <div class="glass card-pulse stat-card">
                 <div class="stat-icon ic-green">↕</div>
                 <div class="stat-body">
-                    <span class="stat-value">+{{ report.overview.total_additions|default(0) }} / −{{ report.overview.total_deletions|default(0) }}</span>
+                    <span class="stat-value" data-refresh="lines_changed">+{{ report.overview.total_additions|default(0) }} / −{{ report.overview.total_deletions|default(0) }}</span>
                     <span class="stat-label">Lines Changed ({{ activity_window }}d)</span>
                 </div>
             </div>
@@ -187,6 +191,7 @@
             <div class="glass card-pulse h-100">
                 <div class="card-header-row"><h2>Languages</h2></div>
                 <canvas id="languagesChart" class="chart-canvas"
+                        data-refresh-chart="languages"
                         data-labels='{{ report.languages.keys()|list|tojson }}'
                         data-values='{{ report.languages.values()|list|tojson }}'></canvas>
                 <div class="chart-empty" id="langEmpty">No language data</div>
@@ -196,6 +201,7 @@
             <div class="glass card-pulse h-100">
                 <div class="card-header-row"><h2>Member Status</h2></div>
                 <canvas id="statusChart" class="chart-canvas"
+                        data-refresh-chart="status"
                         data-active="{{ report.overview.active_members|default(0) }}"
                         data-inactive="{{ report.overview.inactive_members|default(0) }}"></canvas>
                 <div class="chart-empty" id="statusEmpty">No member data</div>
@@ -279,12 +285,14 @@
             <div class="glass card-pulse mb-4">
                 <div class="card-header-row"><h2>Commits per Member</h2></div>
                 <canvas id="commitsChart" class="chart-canvas"
+                        data-refresh-chart="commits"
                         data-labels='{{ report.members|map(attribute="username")|list|tojson }}'
                         data-values='{{ report.members|map(attribute="commits")|list|tojson }}'></canvas>
             </div>
             <div class="glass card-pulse">
                 <div class="card-header-row"><h2>Activity Score</h2></div>
                 <canvas id="scoreChart" class="chart-canvas"
+                        data-refresh-chart="score"
                         data-labels='{{ report.members|map(attribute="username")|list|tojson }}'
                         data-values='{{ report.members|map(attribute="activity_score")|list|tojson }}'></canvas>
             </div>
@@ -356,10 +364,6 @@
         <div class="col-lg-5">
             <div class="glass card-pulse h-100">
                 <div class="card-header-row">
-<<<<<<< HEAD
-                    <h2>Webhook Events</h2>
-                    <span class="badge badge-glass">{{ recent_activity|length }} events</span>
-=======
                     <h2>Recent Activity (Webhooks)</h2>
                     <div class="webhook-status">
                         {% if webhook_configured %}
@@ -369,7 +373,6 @@
                         {% endif %}
                         <span class="badge badge-glass">{{ recent_activity|length }} events</span>
                     </div>
->>>>>>> 074071b (Fix sidebar vertical scrolling)
                 </div>
                 <div class="feed-list">
                     {% for ev in recent_activity %}
@@ -617,22 +620,117 @@
 
 <!-- ================================================================
      TAB 7: AI ANALYSIS
-================================================================ -->
+=============================================================== -->
 <section class="tab-pane" id="tab-ai-analysis">
     <div class="glass card-pulse mb-4">
         <div class="card-header-row">
             <h2>Repository Health Analysis</h2>
-            <span class="badge badge-glass">{{ 'Claude AI' if ai_enabled else 'Rule-based analyzer' }}</span>
+            <span class="badge badge-glass" id="aiEngineBadge">{{ 'Claude AI' if ai_enabled else 'Rule-based analyzer' }}</span>
         </div>
         <p class="muted mb-0">
             Rule-based analysis of team activity, PR hygiene, issue backlog, commit quality
-            and bus factor. Analysis output is stored locally and never modifies the repository.
+            and bus factor, plus deterministic static analysis of the files changed in recent
+            commits. Analysis output is stored locally and never modifies the repository.
         </p>
-        <div class="mt-3">
+        <div class="mt-3 d-flex align-items-center flex-wrap gap-2">
             <button type="button" class="btn btn-pulse btn-sm" id="analyzeRepoBtn">Analyze Repository</button>
-            <span class="muted small ms-2" id="repoAnalysisStatus"></span>
+            <span class="muted small" id="repoAnalysisStatus"></span>
+            {% if last_analyzed %}<span class="badge badge-glass" id="lastAnalyzedBadge">Last analysis {{ last_analyzed[:16].replace('T', ' ') }} UTC</span>{% endif %}
         </div>
         <div id="repoAnalysisResult" class="mt-3"></div>
+    </div>
+
+    <div class="row g-4 mb-4">
+        <div class="col-md-6">
+            <div class="glass card-pulse h-100">
+                <div class="card-header-row">
+                    <h2>Commit Analysis</h2>
+                    <span class="badge badge-glass">rule-based</span>
+                </div>
+                <p class="muted mb-0">
+                    Classifies recent commits as Normal, Risky, Bug-prone, Large,
+                    Suspicious or Needs review so risky changes stand out.
+                </p>
+                <div class="mt-3">
+                    <button type="button" class="btn btn-pulse btn-sm" id="analyzeCommitsBtn">Analyze Commits</button>
+                    <span class="muted small" id="commitAnalysisStatus"></span>
+                </div>
+                <div id="commitAnalysisResult" class="mt-3"></div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="glass card-pulse h-100">
+                <div class="card-header-row">
+                    <h2>Member Contribution</h2>
+                    <span class="badge badge-glass">rule-based</span>
+                </div>
+                <p class="muted mb-0">
+                    Contribution share and activity level for every tracked member,
+                    highest contributor first.
+                </p>
+                <div class="mt-3">
+                    <button type="button" class="btn btn-pulse btn-sm" id="analyzeMembersBtn">Analyze Members</button>
+                    <span class="muted small" id="memberAnalysisStatus"></span>
+                </div>
+                <div id="memberAnalysisResult" class="mt-3"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="glass card-pulse mb-4">
+        <div class="card-header-row">
+            <h2>Code Error Analysis</h2>
+            <span class="badge badge-glass">static + scan + stored AI</span>
+        </div>
+        <p class="muted mb-0">
+            Deterministic checks (Python syntax/AST, JavaScript structure, hard-coded secrets,
+            unguarded JSON.parse/fetch) combined with security-scan findings and previously
+            stored AI analyses. Findings are masked, deduplicated and sorted by severity.
+        </p>
+        <div class="row g-2 mt-3">
+            <div class="col-6 col-lg-3">
+                <div class="glass card-pulse stat-card">
+                    <div class="stat-icon ic-red">✖</div>
+                    <div class="stat-body">
+                        <span class="stat-value" data-refresh="static_critical">{{ static_summary.CRITICAL }}</span>
+                        <span class="stat-label">Critical</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-lg-3">
+                <div class="glass card-pulse stat-card">
+                    <div class="stat-icon ic-orange">!</div>
+                    <div class="stat-body">
+                        <span class="stat-value" data-refresh="static_high">{{ static_summary.HIGH }}</span>
+                        <span class="stat-label">High</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-lg-3">
+                <div class="glass card-pulse stat-card">
+                    <div class="stat-icon ic-blue">i</div>
+                    <div class="stat-body">
+                        <span class="stat-value" data-refresh="static_medium">{{ static_summary.MEDIUM }}</span>
+                        <span class="stat-label">Medium</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-lg-3">
+                <div class="glass card-pulse stat-card">
+                    <div class="stat-icon ic-green">·</div>
+                    <div class="stat-body">
+                        <span class="stat-value" data-refresh="static_low">{{ static_summary.LOW }}</span>
+                        <span class="stat-label">Low</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="mt-3 d-flex align-items-center flex-wrap gap-2">
+            <button type="button" class="btn btn-pulse btn-sm" id="analyzeErrorsBtn">Run Error Analysis</button>
+            <span class="muted small" id="errorAnalysisStatus"></span>
+            {% if static_analyzed_at %}<span class="badge badge-glass">static scan {{ static_analyzed_at[:16].replace('T', ' ') }} UTC</span>{% endif %}
+        </div>
+        <div id="errorAnalysisResult" class="mt-3"></div>
     </div>
 
     <div class="glass card-pulse mb-4">
@@ -698,6 +796,22 @@
         </p>
     </div>
 
+    <div class="glass card-pulse mb-4">
+        <div class="card-header-row">
+            <h2>Fix Preview (no changes applied)</h2>
+            <span class="badge badge-glass">read-only diff</span>
+        </div>
+        <p class="muted mb-0">
+            Generate the AI fix and review it as a diff <strong>before</strong> opening any
+            pull request. Nothing is written to GitHub by the preview.
+        </p>
+        <form id="aiPreviewForm" class="d-flex gap-2 flex-wrap mt-3">
+            <input name="path" class="form-control form-control-sm" style="max-width: 340px" placeholder="path/to/file.py" required>
+            <button type="submit" class="btn btn-pulse btn-sm" id="aiPreviewBtn">Generate Preview</button>
+        </form>
+        <div id="aiPreviewResult" class="mt-3"></div>
+    </div>
+
     <div class="glass card-pulse">
         <div class="card-header-row">
             <h2>Fix Attempts</h2>
@@ -713,6 +827,7 @@
                         <th>PR</th>
                         <th>Validation</th>
                         <th>Created</th>
+                        <th class="text-center">Rollback</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -724,13 +839,26 @@
                         <td>{% if f.pr_url %}<a href="{{ f.pr_url }}" target="_blank" rel="noopener">PR</a>{% else %}—{% endif %}</td>
                         <td class="muted">{{ f.validation or f.error or '—' }}</td>
                         <td class="muted">{{ (f.created_at or '')[:16].replace('T', ' ') }}</td>
+                        <td class="text-center">
+                            {% if f.branch and f.branch.startswith('ai-fix/') %}
+                            <button type="button" class="btn btn-outline-danger btn-sm rollback-btn"
+                                    data-branch="{{ f.branch }}" title="Delete the ai-fix branch (before the PR is merged)">
+                                ⟲ Rollback
+                            </button>
+                            {% else %}—{% endif %}
+                        </td>
                     </tr>
                     {% else %}
-                    <tr><td colspan="6" class="muted text-center py-4">No fix attempts yet.</td></tr>
+                    <tr><td colspan="7" class="muted text-center py-4">No fix attempts yet.</td></tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
+        <p class="muted small p-3 mb-0 border-top border-light">
+            Rollback deletes the <code>ai-fix/…</code> branch so the PR closes automatically.
+            Only branches created by the AI-fix workflow can be rolled back, and never after
+            the PR has been merged.
+        </p>
     </div>
 </section>
 

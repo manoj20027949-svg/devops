@@ -764,6 +764,23 @@ class GitHubAPI:
             json={"ref": f"refs/heads/{new_branch}", "sha": base_sha},
         )
 
+    def delete_branch(self, owner: str, repo: str, branch: str) -> bool:
+        """
+        Delete a branch (ref) on the remote repository.
+
+        Used to roll back an AI-fix attempt that was never merged into the
+        default branch. The caller MUST validate that the branch is safe to
+        delete (e.g. starts with the ``ai-fix/`` prefix) - this method does
+        not guard anything on its own. Returns True on success.
+        """
+        self._request("DELETE", f"/repos/{owner}/{repo}/git/refs/heads/{branch}")
+        # Drop any cached state for the removed branch.
+        prefix = f"/repos/{owner}/{repo}/git/refs/heads/{branch}"
+        for key in list(_HTTP_CACHE):
+            if isinstance(key, tuple) and key[1].startswith(prefix):
+                del _HTTP_CACHE[key]
+        return True
+
     def _create_blob(self, owner: str, repo: str, content: str) -> str:
         """Create a git blob and return its SHA."""
         blob = self._request(
