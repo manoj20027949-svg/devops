@@ -265,6 +265,7 @@ def _ai_errors_payload(store, scan_findings: list[dict], static_findings: list[d
     Merge every source of error findings into one list for the frontend:
 
       * stored AI/rule-based analyses (severity medium/high/critical)
+      * stored full repository code analysis results
       * the security scan cache (regex findings)
       * fresh static analysis findings on recently changed files
 
@@ -274,15 +275,42 @@ def _ai_errors_payload(store, scan_findings: list[dict], static_findings: list[d
 
     stored = []
     for a in store.list_analyses(limit=50):
-        if a["result"].get("severity") in ("high", "critical", "medium"):
+        kind = a.get("kind", "")
+        result = a["result"]
+
+        # Handle full repo_code analyses which have a nested "errors" list.
+        if kind == "repo_code" and "errors" in result:
+            for err in result["errors"]:
+                sev = str(err.get("severity") or "").lower()
+                if sev in ("high", "critical", "medium"):
+                    stored.append({
+                        "id": a["id"],
+                        "created_at": a["created_at"],
+                        "kind": "repo_code",
+                        "target": err.get("file", a.get("target", "")),
+                        "author": a["author"],
+                        "result": {
+                            "severity": sev,
+                            "file": err.get("file"),
+                            "line": err.get("line", 0),
+                            "error_type": err.get("type", ""),
+                            "problem": err.get("message", ""),
+                            "explanation": err.get("message", ""),
+                            "suggested_fix": err.get("suggestion", ""),
+                            "engine": err.get("engine", "static"),
+                        },
+                    })
+            continue
+
+        if result.get("severity") in ("high", "critical", "medium"):
             stored.append(
                 {
                     "id": a["id"],
                     "created_at": a["created_at"],
-                    "kind": a["kind"],
+                    "kind": kind,
                     "target": a["target"],
                     "author": a["author"],
-                    "result": a["result"],
+                    "result": result,
                 }
             )
 
@@ -531,11 +559,17 @@ def register_routes(app: Flask) -> None:
         recent_activity = list(app.extensions["recent_activity"])
         static_analysis = app.extensions["static_analysis"]
 
+        # Count AI-detected errors from individual file analyses (severity-based)
         ai_errors_count = sum(
             1
             for a in ai_analyses
             if a["result"].get("severity") in ("high", "critical", "medium")
         )
+        # Also count errors from full repository code analysis (repo_code kind)
+        for a in ai_analyses:
+            if a.get("kind") == "repo_code":
+                repo_errors = a["result"].get("errors") or []
+                ai_errors_count += len(repo_errors)
         ai_fixed_count = sum(1 for f in fix_attempts if f.get("status") == "created")
 
         return render_template(
@@ -1249,8 +1283,9 @@ def register_api_routes(app: Flask) -> None:
     @login_required
     def api_ai_errors():
         """
-        Aggregated error list: stored AI analyses + cached security scan
-        findings + fresh deterministic static findings on changed files.
+        Aggregated error list: stored AI analyses + stored full repo_code
+        analysis results + cached security scan findings + fresh
+        deterministic static findings on changed files.
         Each entry carries a ``finding`` (normalized result) plus ``detail``
         (the original source record) so the UI can show why/where.
         """
@@ -1280,6 +1315,11 @@ def register_api_routes(app: Flask) -> None:
             for a in ai_analyses
             if a["result"].get("severity") in ("high", "critical", "medium")
         )
+        # Also count individual errors from full repo_code analyses.
+        for a in ai_analyses:
+            if a.get("kind") == "repo_code":
+                repo_errors = a["result"].get("errors") or []
+                errors += len(repo_errors)
         scan_errors = sum(
             1
             for f in scan_findings
@@ -1622,6 +1662,62 @@ def register_api_routes(app: Flask) -> None:
             author=session.get("github_user"),
         )
         return jsonify(result)
+
+    @app.route("/api/ai/full-analysis", methods=["POST"])
+    @login_required
+    def api_ai_full_analysis():
+        """
+        Full source-code error analysis: fetches the repository file tree,
+        collects all source files, runs local Python/JS validation and
+        (optionally) AI analysis, then stores results.
+
+        This is the endpoint the "Run Error Analysis" button calls.
+        It replaces the old behaviour of only showing cached/empty data.
+        """
+        from config.logging_setup import get_logger
+        log = get_logger("ai")
+
+        owner, repo = _current_repo()
+        if not owner or not repo:
+            return jsonify({"error": "No repository selected."}), 400
+        api = get_api()
+
+        try:
+            ref = api.get_default_branch(owner, repo)
+            file_tree = api.get_repository_file_tree(owner, repo, ref=ref)
+            source_files = ai_analyzer.collect_repository_source_files(
+                file_tree, api=api, owner=owner, repo=repo, ref=ref,
+            )
+            result = ai_analyzer.analyze_repository_files(source_files)
+        except GitHubError as exc:
+            return jsonify({"error": exc.message}), 400
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Full analysis failed: %s", exc)
+            return jsonify({"error": f"Analysis failed: {exc}"}), 500
+
+        # Store the analysis so the dashboard can pick it up.
+        store = app.extensions["store"]
+        store.save_analysis(
+            "repo_code",
+            f"{owner}/{repo}",
+            {
+                "errors": result["errors"],
+                "error_count": result["error_count"],
+                "files_analyzed": result["files_analyzed"],
+                "python_files_checked": result["python_files_checked"],
+                "local_errors_found": result["local_errors_found"],
+                "ai_errors_found": result["ai_errors_found"],
+                "summary": result["summary"],
+            },
+            author=session.get("github_user"),
+        )
+        app.extensions["last_analyzed"] = _utc_now_iso()
+
+        return jsonify({
+            "ok": True,
+            "analysis": result,
+            "last_analyzed": app.extensions["last_analyzed"],
+        })
 
     @app.route("/api/ai/fix-pr", methods=["POST"])
     @login_required
