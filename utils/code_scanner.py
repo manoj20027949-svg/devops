@@ -16,6 +16,8 @@ a concrete recommendation, exactly as required by the dashboard.
 
 from __future__ import annotations
 
+import ast
+import builtins
 import os
 import re
 from dataclasses import dataclass, field
@@ -249,6 +251,240 @@ def _rules_for(extension: str) -> list[Rule]:
     return _RULES_BY_EXTENSION.get(extension, [])
 
 
+# ----------------------------------------------------------------------
+# Deterministic Python checks (ast-based, no extra dependencies)
+# ----------------------------------------------------------------------
+
+# Names that are almost always available through a framework or stdlib import
+# chain and cannot be resolved statically. They are exempted so the
+# undefined-name check stays low-noise; anything else used but never bound
+# in the file is flagged as a possible undefined variable.
+_COMMON_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        # Flask / app context globals.
+        "request", "session", "g", "current_app", "url_for", "redirect",
+        "render_template", "flash", "jsonify", "abort", "make_response",
+        "Response", "Flask", "Blueprint", "app",
+        # Common stdlib modules (safe to treat as available).
+        "os", "sys", "re", "json", "time", "datetime", "timedelta",
+        "hashlib", "base64", "subprocess", "tempfile", "shutil", "pathlib",
+        "sqlite3", "threading", "logging", "collections", "itertools",
+        "functools", "typing", "dataclasses", "random", "math", "uuid",
+        "io", "csv", "string", "argparse", "traceback", "contextlib",
+        "copy", "glob", "signal", "asyncio", "decimal", "socket", "urllib",
+        "requests", "dotenv", "pytest", "anthropic", "authlib", "flask",
+        # Project-wide convenience imports used across modules.
+        "settings", "logger", "get_logger",
+        # Common typing names used in annotations.
+        "Any", "Optional", "Dict", "List", "Tuple", "Set", "Iterable",
+        "Iterator", "Callable", "Union", "Type", "Generator", "NoReturn",
+        "Sequence", "Mapping", "Mapped", "Self", "override", "cast",
+        # dunder-ish specials sometimes referenced explicitly.
+        "__name__", "__file__", "__doc__", "__version__",
+    }
+)
+
+_BUILTIN_NAMES: frozenset[str] = frozenset(builtins.__dict__.keys())
+
+
+def _collect_bound_names(tree: ast.AST) -> set[str]:
+    """Gather every name that is bound anywhere in the module."""
+    bound: set[str] = set()
+
+    class _Binder(ast.NodeVisitor):
+        def visit_Name(self, node: ast.Name) -> None:
+            if isinstance(node.ctx, (ast.Store, ast.Del)):
+                bound.add(node.id)
+
+        def visit_FunctionDef(self, node) -> None:
+            bound.add(node.name)
+            for arg in list(node.args.posonlyargs) + list(node.args.args) + list(node.args.kwonlyargs):
+                bound.add(arg.arg)
+            if node.args.vararg:
+                bound.add(node.args.vararg.arg)
+            if node.args.kwarg:
+                bound.add(node.args.kwarg.arg)
+            self.generic_visit(node)
+
+        visit_AsyncFunctionDef = visit_FunctionDef
+
+        def visit_ClassDef(self, node) -> None:
+            bound.add(node.name)
+            self.generic_visit(node)
+
+        def visit_Import(self, node) -> None:
+            for alias in node.names:
+                bound.add((alias.asname or alias.name).split(".")[0])
+            self.generic_visit(node)
+
+        def visit_ImportFrom(self, node) -> None:
+            for alias in node.names:
+                bound.add(alias.asname or alias.name)
+            self.generic_visit(node)
+
+        def visit_For(self, node) -> None:
+            for child in ast.walk(node.target):
+                if isinstance(child, ast.Name):
+                    bound.add(child.id)
+            self.generic_visit(node)
+
+        visit_AsyncFor = visit_For
+
+        def visit_With(self, node) -> None:
+            for item in node.items:
+                if item.optional_vars:
+                    for child in ast.walk(item.optional_vars):
+                        if isinstance(child, ast.Name):
+                            bound.add(child.id)
+            self.generic_visit(node)
+
+        visit_AsyncWith = visit_With
+
+        def visit_ExceptHandler(self, node) -> None:
+            if node.name:
+                bound.add(node.name)
+            self.generic_visit(node)
+
+        def visit_ListComp(self, node) -> None:
+            for gen in node.generators:
+                for child in ast.walk(gen.target):
+                    if isinstance(child, ast.Name):
+                        bound.add(child.id)
+            self.generic_visit(node)
+
+        visit_SetComp = visit_ListComp
+        visit_DictComp = visit_ListComp
+        visit_GeneratorExp = visit_ListComp
+
+        def visit_NamedExpr(self, node) -> None:
+            for child in ast.walk(node.target):
+                if isinstance(child, ast.Name):
+                    bound.add(child.id)
+            self.generic_visit(node)
+
+        def visit_Global(self, node) -> None:
+            bound.update(node.names)
+
+        def visit_Nonlocal(self, node) -> None:
+            bound.update(node.names)
+
+    _Binder().visit(tree)
+    return bound
+
+
+def _undef_names(tree: ast.AST, bound: set[str]) -> list[tuple[str, int]]:
+    """Return (name, lineno) for loads of names never bound in the module."""
+    found: list[tuple[str, int]] = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Load)
+            and node.id not in bound
+            and node.id not in _BUILTIN_NAMES
+            and node.id not in _COMMON_ALLOWLIST
+        ):
+            found.append((node.id, node.lineno))
+    return found
+
+
+def _line_at(content: str, lineno: int) -> str:
+    lines = content.splitlines()
+    if 1 <= lineno <= len(lines):
+        return lines[lineno - 1].strip()
+    return ""
+
+
+def analyze_python_content(filename: str, content: str) -> list[Finding]:
+    """
+    Deterministic Python checks using only the stdlib: syntax validation via
+    `ast.parse` plus a light undefined-name / unused-import scan. Never raises.
+    """
+    findings: list[Finding] = []
+
+    # 1. Syntax errors (highest signal, cheap).
+    try:
+        tree = ast.parse(content, filename=filename)
+    except SyntaxError as exc:
+        findings.append(
+            Finding(
+                rule_id="SYNTAX_ERROR",
+                severity="HIGH",
+                filename=filename,
+                line_number=exc.lineno or 0,
+                line_content=_line_at(content, exc.lineno or 0),
+                description=f"Python syntax error: {exc.msg}",
+                recommendation="Fix the reported syntax on this line so the module can be imported.",
+            )
+        )
+        # No point running further AST checks on unparsable code.
+        return findings
+    except (ValueError, TypeError) as exc:
+        return findings
+
+    # 2. Undefined names (heuristic, always worded as "possible").
+    bound = _collect_bound_names(tree)
+    seen: set[tuple[str, int]] = set()
+    for name, lineno in _undef_names(tree, bound):
+        key = (name, lineno)
+        if key in seen:
+            continue
+        seen.add(key)
+        findings.append(
+            Finding(
+                rule_id="UNDEFINED_NAME",
+                severity="MEDIUM",
+                filename=filename,
+                line_number=lineno,
+                line_content=_line_at(content, lineno),
+                description=f"Possible undefined variable: `{name}` is used but never defined or imported in this file.",
+                recommendation=(
+                    f"Define or import `{name}` before using it, or confirm it is "
+                    "provided by the framework at runtime."
+                ),
+            )
+        )
+
+    # 3. Unused imports (dead code).
+    used_names: set[str] = {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name)
+    }
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                local = (alias.asname or alias.name).split(".")[0]
+                if local not in used_names:
+                    findings.append(
+                        Finding(
+                            rule_id="UNUSED_IMPORT",
+                            severity="LOW",
+                            filename=filename,
+                            line_number=node.lineno,
+                            line_content=_line_at(content, node.lineno),
+                            description=f"Imported module `{alias.name}` is never used in this file.",
+                            recommendation="Remove the unused import or start using it.",
+                        )
+                    )
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                local = alias.asname or alias.name
+                if local not in used_names:
+                    findings.append(
+                        Finding(
+                            rule_id="UNUSED_IMPORT",
+                            severity="LOW",
+                            filename=filename,
+                            line_number=node.lineno,
+                            line_content=_line_at(content, node.lineno),
+                            description=f"Imported name `{local}` from `{node.module or ''}` is never used.",
+                            recommendation="Remove the unused import or start using it.",
+                        )
+                    )
+
+    return findings
+
+
 def _scan_content(
     filename: str,
     content: str,
@@ -337,6 +573,8 @@ class CodeScanner:
                     continue
 
                 findings.extend(_scan_content(full_path, content, _rules_for(ext)))
+                if ext == ".py":
+                    findings.extend(analyze_python_content(full_path, content))
                 scanned += 1
                 if scanned >= max_files:
                     logger.warning("Reached max_files (%d); stopping scan.", max_files)
@@ -420,6 +658,8 @@ class CodeScanner:
                 continue
 
             findings.extend(_scan_content(path, content, _rules_for(ext)))
+            if ext == ".py":
+                findings.extend(analyze_python_content(path, content))
 
         logger.info("Scanned GitHub repo %s/%s -> %d findings", owner, repo, len(findings))
         return findings

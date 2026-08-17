@@ -29,6 +29,12 @@ Member Profile
                 </span>
             </div>
             <p class="muted small mt-2 mb-0">{{ profile.member.score_reason }}</p>
+            {% if member_ai %}
+            <p class="small mt-2 mb-0">
+                <span class="badge badge-status st-{{ member_ai.level }}">{{ member_ai.status|replace('-', ' ')|title }}</span>
+                <span class="muted d-inline">{{ member_ai.text }}</span>
+            </p>
+            {% endif %}
             <div class="repo-stats mt-3">
                 <span>{{ profile.member.commits }} commits</span>
                 <span>{{ profile.member.pr_count }} PRs</span>

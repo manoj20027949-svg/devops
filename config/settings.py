@@ -91,9 +91,16 @@ class Settings:
         self.AI_FIX_LINT_CMD: str = os.getenv("AI_FIX_LINT_CMD", "")
 
         # --- Anthropic Claude (optional) ---
-        self.ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
-        self.ANTHROPIC_MODEL: str = os.getenv(
-            "ANTHROPIC_MODEL", "claude-3-5-haiku-20241022"
+        # AI_API_KEY / AI_MODEL are accepted as generic aliases so the AI
+        # provider is configurable without editing code. ANTHROPIC_* win when
+        # both are set, for backwards compatibility.
+        self.ANTHROPIC_API_KEY: str = (
+            os.getenv("ANTHROPIC_API_KEY", "") or os.getenv("AI_API_KEY", "")
+        )
+        self.ANTHROPIC_MODEL: str = (
+            os.getenv("ANTHROPIC_MODEL", "")
+            or os.getenv("AI_MODEL", "")
+            or "claude-3-5-haiku-20241022"
         )
 
         # --- Logging ---

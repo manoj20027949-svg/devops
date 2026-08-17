@@ -633,4 +633,117 @@
             void path; void label;
         });
     }
+
+    // ---------- Auto-refresh (every 30s) ----------
+    var lastUpdated = document.getElementById("lastUpdatedTime");
+    var REFRESH_INTERVAL_MS = 30000;
+
+    function pad2(n) {
+        return n < 10 ? "0" + n : String(n);
+    }
+
+    function updateLastUpdated() {
+        if (!lastUpdated) return;
+        var now = new Date();
+        lastUpdated.textContent =
+            pad2(now.getHours()) + ":" + pad2(now.getMinutes()) + ":" + pad2(now.getSeconds());
+    }
+
+    function setText(id, value) {
+        var el = document.getElementById(id);
+        if (el) el.textContent = String(value == null ? "" : value);
+    }
+
+    function setCanvasData(canvasId, key, value) {
+        var canvas = document.getElementById(canvasId);
+        if (canvas) canvas.dataset[key] = JSON.stringify(value);
+    }
+
+    function refreshOverview(overview, languages) {
+        if (!overview) return;
+        setText("statMembers", overview.members);
+        setText("statActiveMembers", overview.active_members || 0);
+        setText("statInactiveMembers", overview.inactive_members || 0);
+        setText("statCommits", overview.total_commits || 0);
+        setText("statOpenPrs", overview.open_prs || 0);
+        setText("statMergedPrs", overview.merged_prs || 0);
+        setText("statOpenIssues", overview.open_issues || 0);
+        setText("statTotalPrs", overview.total_prs || 0);
+        setText("statContributors", overview.contributors_count || 0);
+        setText("statLines", "+" + (overview.total_additions || 0) + " / \u2212" + (overview.total_deletions || 0));
+        setCanvasData("statusChart", "active", overview.active_members || 0);
+        setCanvasData("statusChart", "inactive", overview.inactive_members || 0);
+        if (languages) {
+            setCanvasData("languagesChart", "labels", Object.keys(languages));
+            setCanvasData("languagesChart", "values", Object.keys(languages).map(function (k) { return languages[k]; }));
+        }
+    }
+
+    function refreshMembers(members) {
+        if (!members) return;
+        setCanvasData("commitsChart", "labels", members.map(function (m) { return m.username; }));
+        setCanvasData("commitsChart", "values", members.map(function (m) { return m.commits || 0; }));
+        setCanvasData("scoreChart", "labels", members.map(function (m) { return m.username; }));
+        setCanvasData("scoreChart", "values", members.map(function (m) { return m.activity_score || 0; }));
+
+        document.querySelectorAll("#tab-members tbody tr[data-username]").forEach(function (row) {
+            var match = null;
+            for (var i = 0; i < members.length; i += 1) {
+                if (members[i].username === row.dataset.username) { match = members[i]; break; }
+            }
+            if (!match) return;
+            var cells = row.querySelectorAll("td");
+            if (cells.length < 11) return;
+            cells[3].textContent = match.commits || 0;
+            cells[4].textContent = match.commits_all_time != null ? match.commits_all_time : (match.commits || 0);
+            cells[5].textContent = match.prs_created != null ? match.prs_created : (match.pr_count || 0);
+            cells[6].textContent = match.prs_merged || 0;
+            cells[7].textContent = match.prs_reviewed || 0;
+            cells[8].textContent = match.issues_created != null ? match.issues_created : (match.issue_count || 0);
+            var status = (match.activity_status || "INACTIVE").toLowerCase().replace(/ /g, "-");
+            var badge = cells[9].querySelector(".badge-status");
+            if (badge) {
+                badge.className = "badge badge-status st-" + status;
+                badge.textContent = match.activity_status || "INACTIVE";
+            }
+            var small = cells[9].querySelector("small");
+            if (small) small.textContent = match.last_active_text || "No activity";
+            var fill = cells[10].querySelector(".score-fill");
+            var num = cells[10].querySelector(".score-num");
+            if (fill) fill.style.width = (match.activity_score || 0) + "%";
+            if (num) num.textContent = match.activity_score || 0;
+        });
+    }
+
+    function refreshDashboard() {
+        Promise.all([
+            fetch("/api/overview").then(function (r) { return r.json(); }),
+            fetch("/api/team/members").then(function (r) { return r.json(); }),
+            fetch("/api/commits").then(function (r) { return r.json(); }),
+            fetch("/api/pull-requests").then(function (r) { return r.json(); }),
+            fetch("/api/issues").then(function (r) { return r.json(); }),
+        ]).then(function (results) {
+            var overview = results[0];
+            var members = results[1];
+            var commits = results[2];
+            var prs = results[3];
+            var issues = results[4];
+            if (overview.error) throw new Error(overview.error);
+            refreshOverview(overview.overview || {}, overview.languages);
+            refreshMembers(members.members || []);
+            setText("commitCount", (commits.pushes || []).length);
+            setText("prCount", (prs.pull_requests || []).length);
+            setText("issueCount", (issues.issues || []).length);
+            if (window.GitPulseCharts) window.GitPulseCharts.renderAll();
+            updateLastUpdated();
+        }).catch(function () {
+            // Graceful failure: keep the last good data, just note the miss.
+            if (lastUpdated) lastUpdated.textContent = "update failed";
+        });
+    }
+
+    if (document.getElementById("refreshBtn")) {
+        updateLastUpdated();
+        window.setInterval(refreshDashboard, REFRESH_INTERVAL_MS);
+    }
 })();

@@ -81,10 +81,11 @@ Team Members
                         <small class="muted d-block">{{ m.last_active_text|default('No activity') }}</small>
                     </td>
                     <td class="text-center">
-                        <div class="score-wrap" title="{{ m.score_reason|default('') }}">
+                        <div class="score-wrap" title="{{ m.ai_text|default(m.score_reason|default('')) }}">
                             <div class="score-bar"><div class="score-fill" style="width: {{ m.activity_score }}%"></div></div>
                             <span class="score-num">{{ m.activity_score }}</span>
                         </div>
+                        {% if m.ai_text %}<small class="muted d-block text-center ai-insight">{{ m.ai_text }}</small>{% endif %}
                     </td>
                 </tr>
                 {% else %}

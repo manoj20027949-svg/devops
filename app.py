@@ -8,6 +8,7 @@ Or via gunicorn (production):
     gunicorn --bind 0.0.0.0:8000 --workers 4 'app:create_app()'
 """
 
+
 import os
 
 from flask import (
@@ -399,6 +400,7 @@ def register_routes(app: Flask) -> None:
             "member.html",
             profile=profile,
             suggestions=[s.to_dict() for s in member_suggestions],
+            member_ai=ai_analyzer.member_activity_analysis(profile["member"]),
             ai_enabled=settings.anthropic_configured,
             selected_repo=_repo_full_name(),
         )
@@ -433,6 +435,11 @@ def register_routes(app: Flask) -> None:
             filter_title = "Inactive Members"
         else:
             status = ""
+
+        # Deterministic per-member analysis text (no network/AI calls here).
+        for m in members:
+            if "ai_text" not in m:
+                m["ai_text"] = ai_analyzer.member_activity_analysis(m).get("text", "")
 
         return render_template(
             "team_members.html",
@@ -784,7 +791,11 @@ def register_api_routes(app: Flask) -> None:
         report, error = _report_or_error()
         if error:
             return jsonify({"error": error}), 400
-        return jsonify({"members": report["members"]})
+        members = report["members"]
+        for m in members:
+            if "ai_text" not in m:
+                m["ai_text"] = ai_analyzer.member_activity_analysis(m).get("text", "")
+        return jsonify({"members": members})
 
     @app.route("/api/team/collaborators")
     @login_required
@@ -1180,6 +1191,52 @@ def register_api_routes(app: Flask) -> None:
             author=session.get("github_user"),
         )
         return jsonify(result)
+
+    @app.route("/api/ai/analyze-commit", methods=["POST"])
+    @login_required
+    def api_ai_analyze_commit():
+        """
+        Analyze a single commit: classify it (Normal / Risky / Bug-prone /
+        Large change / Suspicious / Needs review) and explain why.
+
+        The commit is fetched live from GitHub by SHA so the analysis always
+        uses real data. A pre-fetched commit can also be supplied as
+        {commit: {...}} to avoid an extra API round-trip.
+        """
+        data = request.get_json(silent=True) or {}
+        owner, repo = _current_repo()
+        if not owner or not repo:
+            return jsonify({"error": "No repository selected."}), 400
+
+        commit = data.get("commit")
+        sha = (data.get("sha") or "").strip()
+        if not commit and not sha:
+            return jsonify({"error": "A commit sha is required."}), 400
+
+        api = get_api()
+        if not commit:
+            try:
+                commit = api.build_commit_detail(owner, repo, sha)
+            except GitHubError as exc:
+                return jsonify({"error": exc.message}), 400
+
+        result = ai_analyzer.analyze_commit(commit, context=f"{owner}/{repo}")
+        return jsonify(result)
+
+    @app.route("/api/ai/analyze-commits", methods=["POST"])
+    @login_required
+    def api_ai_analyze_commits():
+        """
+        Batch commit analysis. Accepts {commits: [...]} where each item has
+        the same shape as the dashboard's pushes entries, and returns one
+        analysis per commit.
+        """
+        data = request.get_json(silent=True) or {}
+        commits = data.get("commits") or []
+        if not isinstance(commits, list) or not commits:
+            return jsonify({"error": "A non-empty commits array is required."}), 400
+        results = ai_analyzer.analyze_commits(commits, context=_repo_full_name())
+        return jsonify({"analyses": results, "count": len(results)})
 
     @app.route("/api/ai/fix-pr", methods=["POST"])
     @login_required

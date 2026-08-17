@@ -2,7 +2,7 @@
 
 import base64
 
-from utils.code_scanner import CodeScanner, Finding
+from utils.code_scanner import CodeScanner, Finding, analyze_python_content
 
 
 class TestScanPath:
@@ -164,3 +164,54 @@ class TestReporting:
             "description",
             "recommendation",
         }
+
+
+class TestAnalyzePythonContent:
+    def test_flags_syntax_error(self):
+        findings = analyze_python_content("bad.py", "def foo(:\n    pass\n")
+
+        assert len(findings) == 1
+        assert findings[0].rule_id == "SYNTAX_ERROR"
+        assert findings[0].severity == "HIGH"
+        assert findings[0].line_number == 1
+
+    def test_flags_undefined_name(self):
+        findings = analyze_python_content("u.py", "x = 1\nprint(github_data)\n")
+
+        assert [f.rule_id for f in findings] == ["UNDEFINED_NAME"]
+        assert findings[0].line_number == 2
+        assert "github_data" in findings[0].description
+
+    def test_flags_unused_imports(self):
+        findings = analyze_python_content("i.py", "import os\nimport json\nx = 1\n")
+
+        assert [f.rule_id for f in findings] == ["UNUSED_IMPORT", "UNUSED_IMPORT"]
+        assert all(f.severity == "LOW" for f in findings)
+        assert all("os" in f.description or "json" in f.description for f in findings)
+
+    def test_clean_file_has_no_findings(self):
+        content = (
+            "import math\n"
+            "def area(r):\n"
+            "    return math.pi * r * r\n"
+            "print(area(2))\n"
+        )
+        assert analyze_python_content("ok.py", content) == []
+
+    def test_does_not_report_defined_names(self):
+        content = (
+            "def build():\n"
+            "    x = 1\n"
+            "    return x\n"
+            "result = build()\n"
+            "print(result)\n"
+        )
+        assert analyze_python_content("d.py", content) == []
+
+    def test_scan_path_includes_python_syntax_error(self, tmp_path):
+        target = tmp_path / "app.py"
+        target.write_text("def broken(:\n    pass\n", encoding="utf-8")
+
+        findings = CodeScanner().scan_path(str(tmp_path))
+
+        assert any(f.rule_id == "SYNTAX_ERROR" for f in findings)

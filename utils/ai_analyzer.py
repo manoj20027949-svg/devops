@@ -390,7 +390,12 @@ def rule_based_code_analysis(filename: str, content: str) -> dict:
     fix workflow can always consume a uniform dict.
     """
     from utils.code_scanner import CodeScanner
-    from utils.code_scanner import SCANNABLE_EXTENSIONS, _rules_for, _scan_content
+    from utils.code_scanner import (
+        SCANNABLE_EXTENSIONS,
+        _rules_for,
+        _scan_content,
+        analyze_python_content,
+    )
 
     ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
@@ -408,6 +413,9 @@ def rule_based_code_analysis(filename: str, content: str) -> dict:
         }
 
     findings = _scan_content(filename, content, _rules_for(ext))
+    if ext == ".py":
+        # Deterministic checks (syntax errors, undefined names, unused imports).
+        findings.extend(analyze_python_content(filename, content))
     findings.sort(key=CodeScanner.severity_sort_key)
     if not findings:
         return {
@@ -775,11 +783,23 @@ def analyze_repository(report: dict) -> dict:
 
     return {
         "health_score": health_score,
+        "health_label": _health_label(health_score),
         "summary": _health_summary(health_score, len(findings)),
         "findings": findings,
         "engine": "rule-based",
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def _health_label(score: int) -> str:
+    """Map a 0-100 health score to a human-readable rating."""
+    if score >= 90:
+        return "Excellent"
+    if score >= 70:
+        return "Good"
+    if score >= 45:
+        return "Needs Attention"
+    return "Critical"
 
 
 def _health_summary(score: int, finding_count: int) -> str:
@@ -797,6 +817,372 @@ def _health_summary(score: int, finding_count: int) -> str:
     return (
         f"Repository health is at risk ({finding_count} findings). Prioritize the high-severity items."
     )
+
+
+# ----------------------------------------------------------------------
+# Commit-level analysis (risk classification)
+# ----------------------------------------------------------------------
+
+# Keywords that hint a commit might be risky / bug-prone.
+_RISKY_MESSAGE_TOKENS = (
+    "revert",
+    "hotfix",
+    "temp",
+    "temporary",
+    "hack",
+    "wip",
+    "asap",
+    "urgent",
+    "quick fix",
+    "workaround",
+    "broken",
+    "fix later",
+)
+_BUG_PRONE_MESSAGE_TOKENS = (
+    "fix",
+    "bug",
+    "crash",
+    "error",
+    "failing",
+    "debug",
+    "typo",
+    "regression",
+)
+# File basenames / substrings that make a change suspicious (secrets, config).
+_SUSPICIOUS_FILE_TOKENS = (
+    ".env",
+    "secret",
+    "password",
+    "credential",
+    "token",
+    "api_key",
+    "apikey",
+    ".pem",
+    ".key",
+    ".p12",
+    ".pfx",
+    "id_rsa",
+    "htpasswd",
+    "npmrc",
+    "netrc",
+    "settings.local",
+)
+
+
+def _commit_files(commit: dict) -> list[dict]:
+    """Normalize the file list of a commit regardless of source shape."""
+    files = commit.get("files") or []
+    if not files and commit.get("detail"):
+        files = commit["detail"].get("files") or []
+    return [f for f in files if isinstance(f, dict)]
+
+
+def _commit_stats(commit: dict) -> tuple[int, int]:
+    """Return (additions, deletions) for a commit."""
+    stats = commit.get("stats")
+    if isinstance(stats, dict):
+        return int(stats.get("additions") or 0), int(stats.get("deletions") or 0)
+    additions = sum(int(f.get("additions") or 0) for f in _commit_files(commit))
+    deletions = sum(int(f.get("deletions") or 0) for f in _commit_files(commit))
+    return additions, deletions
+
+
+def _commit_message(commit: dict) -> str:
+    """Return the full commit message (first line for short usage)."""
+    message = commit.get("message") or (commit.get("detail") or {}).get("message") or ""
+    full = commit.get("full_message") or message
+    return str(message), str(full)
+
+
+def _explain(lines: list[str]) -> str:
+    """Join the plain-language explanations for a commit into one sentence."""
+    return " ".join(dict.fromkeys(l for l in lines if l))
+
+
+def _flags_for_commit(commit: dict) -> list[tuple[str, str]]:
+    """
+    Deterministic per-commit checks. Returns (flag_id, plain explanation)
+    pairs, lowest risk first, so the caller can pick the highest-priority
+    classification.
+    """
+    first_line, full_message = _commit_message(commit)
+    lowered = f"{first_line}\n{full_message}".lower()
+    files = _commit_files(commit)
+    additions, deletions = _commit_stats(commit)
+    total_changes = additions + deletions
+    flags: list[tuple[str, str]] = []
+
+    # --- Suspicious: secrets / config files or obvious security red flags.
+    suspicious_files = [
+        f.get("filename", "") for f in files
+        if any(tok in (f.get("filename", "") or "").lower() for tok in _SUSPICIOUS_FILE_TOKENS)
+    ]
+    if suspicious_files:
+        flags.append(
+            (
+                "suspicious",
+                f"Commit touches files that may hold secrets or local config "
+                f"({', '.join(sorted(suspicious_files)[:3])}). Review carefully "
+                "to ensure no credentials were committed.",
+            )
+        )
+    if any(tok in lowered for tok in ("password", "apikey", "api_key", "secret", "token")):
+        flags.append(
+            (
+                "suspicious",
+                "The commit message mentions secrets or credentials; verify no "
+                "sensitive value was hard-coded.",
+            )
+        )
+
+    # --- Bug-prone: fix/regression keywords combined with real code changes.
+    if any(tok in lowered for tok in _BUG_PRONE_MESSAGE_TOKENS) and total_changes > 0:
+        flags.append(
+            (
+                "bug-prone",
+                "The commit message suggests bug-fixing work; check the change "
+                "handles edge cases and includes a regression test.",
+            )
+        )
+
+    # --- Risky: large removals, force-style changes, destructive signals.
+    if deletions > 0 and additions > 0 and deletions > additions * 2:
+        flags.append(
+            (
+                "risky",
+                f"Large deletion ratio ({additions}+ / {deletions}-): most of the "
+                "change removes code, which can break callers that still rely on it.",
+            )
+        )
+    if any(tok in lowered for tok in ("revert", "force push", "delete", "remove")):
+        flags.append(
+            (
+                "risky",
+                "Commit message signals a revert or removal; confirm the behaviour "
+                "change is intentional and tracked.",
+            )
+        )
+
+    # --- Large change: size heuristics.
+    file_count = len(files)
+    if file_count > 20 or total_changes > 1000:
+        flags.append(
+            (
+                "large",
+                f"Large change detected: {file_count} file(s) modified with "
+                f"{total_changes:,} lines changed. This commit may require "
+                "additional review.",
+            )
+        )
+    elif file_count > 10 or total_changes > 400:
+        flags.append(
+            (
+                "large",
+                f"Large change detected: {file_count} file(s) modified with "
+                f"{total_changes:,} lines changed. Consider whether it can be "
+                "split into smaller, reviewable commits.",
+            )
+        )
+
+    # --- Needs review: unclear/auto-generated messages.
+    if not first_line.strip():
+        flags.append(
+            ("needs-review", "Commit has an empty message, making the change hard to audit.")
+        )
+    elif len(first_line.strip()) < 10:
+        flags.append(
+            (
+                "needs-review",
+                "Commit message is very short; a clearer description would help review.",
+            )
+        )
+    if any(tok in lowered for tok in ("merge branch", "merge pull request", "auto-merge")):
+        flags.append(
+            (
+                "needs-review",
+                "Merge commit: verify the branch was reviewed and CI passed before merge.",
+            )
+        )
+
+    return flags
+
+
+# Classification priority (highest first). One commit may carry several flags;
+# we report the most severe one and keep the rest as secondary details.
+_FLAG_PRIORITY = ["suspicious", "bug-prone", "large", "risky", "needs-review"]
+
+_CLASSIFICATION_LABELS = {
+    "suspicious": "Suspicious",
+    "bug-prone": "Bug-Prone",
+    "large": "Large Change",
+    "risky": "Risky",
+    "needs-review": "Needs Review",
+}
+
+_SEVERITY_BY_CLASSIFICATION = {
+    "Suspicious": "high",
+    "Bug-Prone": "high",
+    "Large Change": "medium",
+    "Risky": "high",
+    "Needs Review": "low",
+    "Normal": "low",
+}
+
+
+def _classify(flags: list[tuple[str, str]]) -> tuple[str, str]:
+    """Return (classification, primary_reason) from the detected flags."""
+    if not flags:
+        return (
+            "Normal",
+            "Commit size, message and file set look normal. No risk signals detected.",
+        )
+    for flag_id in _FLAG_PRIORITY:
+        for flag, reason in flags:
+            if flag == flag_id:
+                return _CLASSIFICATION_LABELS.get(flag_id, "Normal"), reason
+    return "Normal", flags[0][1]
+
+
+def _severity_for_classification(classification: str) -> str:
+    return _SEVERITY_BY_CLASSIFICATION.get(classification, "low")
+
+
+def analyze_commit(commit: dict, context: str = "") -> dict:
+    """
+    Analyze a single commit and classify it as Normal / Risky / Bug-prone /
+    Large change / Suspicious / Needs review, with a plain-language reason.
+
+    Deterministic rules always produce output. When Anthropic is configured
+    the classification is enriched with an AI narrative (best-effort).
+    """
+    flags = _flags_for_commit(commit)
+    classification, primary_reason = _classify(flags)
+
+    result: dict = {
+        "sha": commit.get("full_sha") or commit.get("sha") or "",
+        "short_sha": (commit.get("sha") or commit.get("full_sha") or "")[:10],
+        "author": commit.get("author") or commit.get("author_login") or "",
+        "date": commit.get("date") or "",
+        "classification": classification,
+        "severity": _severity_for_classification(classification),
+        "reason": primary_reason,
+        "details": [reason for _, reason in flags],
+        "flags": [flag for flag, _ in flags],
+        "files_changed": len(_commit_files(commit)),
+        "additions": _commit_stats(commit)[0],
+        "deletions": _commit_stats(commit)[1],
+        "engine": "rule-based",
+    }
+
+    if settings.anthropic_configured:
+        enriched = _analyze_commit_ai(commit, classification, primary_reason)
+        if enriched:
+            result["reason"] = enriched.get("reason") or result["reason"]
+            result["suggestion"] = enriched.get("suggestion", "")
+            result["engine"] = "ai"
+
+    return result
+
+
+def _analyze_commit_ai(commit: dict, classification: str, reason: str) -> Optional[dict]:
+    """Ask Claude to confirm/refine the commit classification (best-effort)."""
+    first_line, full_message = _commit_message(commit)
+    files = _commit_files(commit)
+    additions, deletions = _commit_stats(commit)
+    file_names = [f.get("filename", "") for f in files][:15]
+
+    prompt = (
+        "Review this single git commit and confirm or refine its risk "
+        "classification. Respond with a single JSON object only:\n"
+        '{"reason": "<plain-language why, 1-2 sentences>", '
+        '"suggestion": "<one concrete review suggestion>"}\n'
+        f"Current rule-based classification: {classification}\n"
+        f"Rule-based reason: {reason}\n"
+        f"Author: {commit.get('author') or commit.get('author_login') or 'unknown'}\n"
+        f"Message: {first_line}\n"
+        f"Full message: {full_message[:500]}\n"
+        f"Additions: {additions} | Deletions: {deletions}\n"
+        f"Files ({len(file_names)}): {', '.join(file_names)}\n"
+    )
+    return _ai_result_or_none(
+        prompt,
+        system=(
+            "You are a senior code reviewer analyzing commit risk. Only output "
+            "the requested JSON object."
+        ),
+    )
+
+
+def analyze_commits(commits: list[dict], context: str = "") -> list[dict]:
+    """
+    Analyze a batch of commits and return per-commit results, most recent
+    first (the input order is preserved).
+    """
+    return [analyze_commit(c, context=context) for c in commits]
+
+
+def member_activity_analysis(member: dict) -> dict:
+    """
+    Simple, fair, technical analysis of one member's project activity.
+    Never makes personal judgments - only describes commits, PRs and recency.
+
+    Returns {"status": str, "text": str, "level": str} where level is one of
+    high|medium|low|none (used for styling).
+    """
+    username = member.get("username", "unknown")
+    commits = int(member.get("commits") or 0)
+    prs = int(member.get("pr_count") or 0)
+    issues = int(member.get("issue_count") or 0)
+    reviews = int(member.get("prs_reviewed") or 0)
+    last_active_days = member.get("last_active_days")
+    score = int(member.get("activity_score") or 0)
+
+    if last_active_days is None:
+        return {
+            "status": "no-activity",
+            "level": "none",
+            "text": "No activity detected for this member in the analyzed window.",
+        }
+    if last_active_days > 30:
+        return {
+            "status": "no-activity",
+            "level": "none",
+            "text": f"No recent activity detected ({username} last active {last_active_days} days ago).",
+        }
+
+    if commits == 0 and prs == 0 and reviews == 0:
+        return {
+            "status": "no-activity",
+            "level": "none",
+            "text": f"No commits, PRs or reviews detected in the analyzed window.",
+        }
+
+    if score >= 80 and last_active_days <= 7:
+        return {
+            "status": "high-activity",
+            "level": "high",
+            "text": (
+                f"High activity — active contributor during the last 7 days "
+                f"({commits} commits, {prs} PRs, {reviews} reviews)."
+            ),
+        }
+    if score >= 60 or last_active_days <= 7:
+        return {
+            "status": "active",
+            "level": "medium",
+            "text": (
+                f"Good activity — {username} was active {last_active_days} day(s) ago "
+                f"({commits} commits, {prs} PRs, {reviews} reviews)."
+            ),
+        }
+    return {
+        "status": "low-activity",
+        "level": "low",
+        "text": (
+            f"Moderate activity — {username} last active {last_active_days} days ago "
+            f"({commits} commits, {prs} PRs)."
+        ),
+    }
 
 
 def analyze_repository_ai(report: dict) -> Optional[dict]:

@@ -125,3 +125,126 @@ class TestAnalyzeIssue:
         assert result["engine"] == "rule-based"
         assert result["summary"] == "Crash"
         assert "steps" in result
+
+
+class TestAnalyzeCommit:
+    def _commit(self, **overrides):
+        base = {
+            "full_sha": "abc123",
+            "sha": "abc123",
+            "author": "alice",
+            "message": "Add unit tests for the parser module",
+            "date": "2026-01-01T00:00:00Z",
+            "files": [{"filename": "tests/test_parser.py"}],
+            "stats": {"additions": 30, "deletions": 2},
+        }
+        base.update(overrides)
+        return base
+
+    def test_result_shape_has_all_keys(self, monkeypatch):
+        monkeypatch.setattr(ai_analyzer.settings, "ANTHROPIC_API_KEY", "")
+        result = ai_analyzer.analyze_commit(self._commit())
+        for key in (
+            "sha", "short_sha", "author", "classification", "severity",
+            "reason", "flags", "files_changed", "additions", "deletions", "engine",
+        ):
+            assert key in result, f"missing key {key}"
+
+    def test_classifies_large_change(self, monkeypatch):
+        monkeypatch.setattr(ai_analyzer.settings, "ANTHROPIC_API_KEY", "")
+        commit = self._commit(
+            message="refactor everything",
+            files=[{"filename": f"f{i}.py"} for i in range(25)],
+            stats={"additions": 2000, "deletions": 100},
+        )
+        result = ai_analyzer.analyze_commit(commit)
+        assert result["classification"] == "Large Change"
+        assert result["severity"] == "medium"
+
+    def test_classifies_suspicious_when_secrets_touched(self, monkeypatch):
+        monkeypatch.setattr(ai_analyzer.settings, "ANTHROPIC_API_KEY", "")
+        commit = self._commit(
+            message="add token for api",
+            files=[{"filename": "config/.env"}],
+            stats={"additions": 5, "deletions": 0},
+        )
+        result = ai_analyzer.analyze_commit(commit)
+        assert result["classification"] == "Suspicious"
+        assert result["severity"] == "high"
+
+    def test_classifies_normal_commit(self, monkeypatch):
+        monkeypatch.setattr(ai_analyzer.settings, "ANTHROPIC_API_KEY", "")
+        result = ai_analyzer.analyze_commit(self._commit())
+        assert result["classification"] == "Normal"
+        assert result["severity"] == "low"
+
+    def test_handles_missing_stats(self, monkeypatch):
+        monkeypatch.setattr(ai_analyzer.settings, "ANTHROPIC_API_KEY", "")
+        result = ai_analyzer.analyze_commit(
+            {
+                "full_sha": "x", "sha": "x", "author": "bob",
+                "message": "Update parser to handle the new response format", "files": [],
+            }
+        )
+        assert result["classification"] == "Normal"
+
+    def test_flags_vague_message_for_review(self, monkeypatch):
+        monkeypatch.setattr(ai_analyzer.settings, "ANTHROPIC_API_KEY", "")
+        result = ai_analyzer.analyze_commit(
+            {"full_sha": "x", "sha": "x", "author": "bob", "message": "tweak", "files": []}
+        )
+        assert result["classification"] == "Needs Review"
+        assert result["severity"] == "low"
+
+
+class TestMemberActivityAnalysis:
+    def test_high_activity(self):
+        result = ai_analyzer.member_activity_analysis(
+            {
+                "username": "alice", "commits": 45, "pr_count": 3,
+                "prs_reviewed": 6, "last_active_days": 2, "activity_score": 92,
+            }
+        )
+        assert result["status"] == "high-activity"
+        assert result["level"] == "high"
+        assert "High activity" in result["text"]
+
+    def test_no_activity_when_last_active_unknown(self):
+        result = ai_analyzer.member_activity_analysis(
+            {"username": "bob", "commits": 0, "last_active_days": None}
+        )
+        assert result["status"] == "no-activity"
+        assert result["level"] == "none"
+
+    def test_low_activity_when_old(self):
+        result = ai_analyzer.member_activity_analysis(
+            {
+                "username": "carol", "commits": 3, "pr_count": 0,
+                "prs_reviewed": 0, "last_active_days": 45, "activity_score": 20,
+            }
+        )
+        assert result["status"] == "no-activity"
+
+
+class TestHealthLabel:
+    def test_label_mapping(self):
+        assert ai_analyzer._health_label(95) == "Excellent"
+        assert ai_analyzer._health_label(90) == "Excellent"
+        assert ai_analyzer._health_label(75) == "Good"
+        assert ai_analyzer._health_label(50) == "Needs Attention"
+        assert ai_analyzer._health_label(10) == "Critical"
+
+    def test_analyze_repository_includes_label(self, monkeypatch):
+        monkeypatch.setattr(ai_analyzer.settings, "ANTHROPIC_API_KEY", "")
+        report = {
+            "overview": {
+                "members": 1, "inactive_members": 0, "open_issues": 0,
+                "total_prs": 0, "merged_prs": 0,
+            },
+            "members": [], "pushes": [], "pull_requests": [],
+            "issues": [], "contributors": [],
+        }
+        result = ai_analyzer.analyze_repository(report)
+        assert "health_label" in result
+        assert result["health_score"] == 100
+        assert result["health_label"] == "Excellent"
