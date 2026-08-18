@@ -8,7 +8,6 @@ Or via gunicorn (production):
     gunicorn --bind 0.0.0.0:8000 --workers 4 'app:create_app()'
 """
 
-
 import os
 
 from flask import (
@@ -173,6 +172,79 @@ def _load_report() -> tuple[dict | None, str | None]:
 
         get_logger("app").exception("Unexpected error while building team report: %s", exc)
         return None, "Unexpected error while loading GitHub data."
+
+
+def _compute_health_score(report: dict) -> dict:
+    """
+    Compute a transparent heuristic repository health score (0-100) from
+    available report data. Deterministic and auditable.
+    """
+    if not report:
+        return {"score": 0, "summary": "No data available.", "breakdown": {}}
+
+    overview = report.get("overview", {})
+    members = report.get("members", [])
+    pushes = report.get("pushes", [])
+    prs = report.get("pull_requests", [])
+    issues = report.get("issues", [])
+
+    # 1. Commit activity (0-25): more commits = better, capped
+    total_commits = overview.get("total_commits", 0)
+    commit_score = min(25, total_commits * 2)
+
+    # 2. Contributor activity (0-25): more active contributors = better
+    active_members = overview.get("active_members", 0)
+    total_members = max(1, overview.get("members", 1))
+    contributor_score = min(25, int((active_members / total_members) * 25))
+
+    # 3. Issue management (0-25): fewer open issues = better
+    open_issues = overview.get("open_issues", 0)
+    if open_issues == 0:
+        issue_score = 25
+    elif open_issues <= 3:
+        issue_score = 20
+    elif open_issues <= 10:
+        issue_score = 15
+    elif open_issues <= 20:
+        issue_score = 10
+    else:
+        issue_score = 5
+
+    # 4. PR hygiene (0-25): merged PRs vs open = better
+    open_prs = overview.get("open_prs", 0)
+    merged_prs = overview.get("merged_prs", 0)
+    total_prs = open_prs + merged_prs
+    if total_prs == 0:
+        pr_score = 15  # neutral if no PRs
+    else:
+        merge_ratio = merged_prs / total_prs
+        pr_score = min(25, int(merge_ratio * 25) + (5 if open_prs <= 5 else 0))
+
+    total_score = commit_score + contributor_score + issue_score + pr_score
+
+    # Determine health label
+    if total_score >= 80:
+        health_label = "Excellent"
+    elif total_score >= 60:
+        health_label = "Good"
+    elif total_score >= 40:
+        health_label = "Fair"
+    else:
+        health_label = "Needs Attention"
+
+    breakdown = {
+        "commit_activity": {"score": commit_score, "max": 25, "label": "Commit Activity"},
+        "contributors": {"score": contributor_score, "max": 25, "label": "Contributor Activity"},
+        "issue_management": {"score": issue_score, "max": 25, "label": "Issue Management"},
+        "pr_hygiene": {"score": pr_score, "max": 25, "label": "PR Hygiene"},
+    }
+
+    return {
+        "score": total_score,
+        "health_label": health_label,
+        "summary": f"Repository health is {health_label} ({total_score}/100).",
+        "breakdown": breakdown,
+    }
 
 
 def _load_report_view() -> tuple[dict | None, str | None]:
@@ -355,6 +427,7 @@ def register_routes(app: Flask) -> None:
             ai_errors_count=ai_errors_count,
             ai_fixed_count=ai_fixed_count,
             webhook_configured=bool(settings.GITHUB_WEBHOOK_SECRET),
+            health=_compute_health_score(report) if report else None,
         )
 
     # --- Dashboard refresh (re-fetch collaborators + activity) ------------
@@ -400,7 +473,6 @@ def register_routes(app: Flask) -> None:
             "member.html",
             profile=profile,
             suggestions=[s.to_dict() for s in member_suggestions],
-            member_ai=ai_analyzer.member_activity_analysis(profile["member"]),
             ai_enabled=settings.anthropic_configured,
             selected_repo=_repo_full_name(),
         )
@@ -435,11 +507,6 @@ def register_routes(app: Flask) -> None:
             filter_title = "Inactive Members"
         else:
             status = ""
-
-        # Deterministic per-member analysis text (no network/AI calls here).
-        for m in members:
-            if "ai_text" not in m:
-                m["ai_text"] = ai_analyzer.member_activity_analysis(m).get("text", "")
 
         return render_template(
             "team_members.html",
@@ -520,22 +587,43 @@ def register_routes(app: Flask) -> None:
     @app.route("/code-review")
     @login_required
     def code_review():
+        report, error = _load_report()
+        prs = []
+        total_prs = 0
+        needs_review = 0
+        approved_count = 0
+        changes_requested = 0
+        if report:
+            prs = report.get("pull_requests", [])
+            total_prs = len(prs)
+            needs_review = sum(1 for p in prs if p.get("review_status") == "no_reviews")
+            approved_count = sum(1 for p in prs if p.get("review_status") == "approved")
+            changes_requested = sum(1 for p in prs if p.get("review_status") == "changes_requested")
         return render_template(
-            "coming_soon.html",
-            page_title="Code Review",
-            icon="◉",
-            description="Centralized pull-request review queues and review guidance will live here.",
-            selected_repo=_repo_full_name(),
+            "code_review.html",
+            report=report,
+            error=error,
+            prs=prs,
+            repo_name=_repo_full_name(),
+            total_prs=total_prs,
+            needs_review=needs_review,
+            approved_count=approved_count,
+            changes_requested=changes_requested,
         )
 
     @app.route("/notifications")
     @login_required
     def notifications():
+        store = app.extensions["store"]
+        analyses = store.list_analyses(limit=20)
+        recent_activity = list(app.extensions["recent_activity"])
+        scan_cache = app.extensions["scan_cache"]
+        scan_findings = scan_cache.get("data") or []
         return render_template(
-            "coming_soon.html",
-            page_title="Notifications",
-            icon="☼",
-            description="Delivery of team alerts and activity digests will be configured here.",
+            "notifications.html",
+            analyses=analyses,
+            recent_activity=recent_activity,
+            scan_findings=scan_findings,
             selected_repo=_repo_full_name(),
         )
 
@@ -543,11 +631,14 @@ def register_routes(app: Flask) -> None:
     @login_required
     def settings_page():
         return render_template(
-            "coming_soon.html",
-            page_title="Settings",
-            icon="⚙",
-            description="Application, team and notification preferences will be managed here.",
+            "settings.html",
             selected_repo=_repo_full_name(),
+            github_user=session.get("github_user", ""),
+            auth_method=session.get("auth_method", "pat"),
+            ai_enabled=settings.anthropic_configured,
+            webhook_configured=bool(settings.GITHUB_WEBHOOK_SECRET),
+            activity_window=settings.ACTIVITY_WINDOW_DAYS,
+            current_repo=_repo_full_name(),
         )
 
     # --- AI: analyze a file (dashboard form) -----------------------------
@@ -791,11 +882,7 @@ def register_api_routes(app: Flask) -> None:
         report, error = _report_or_error()
         if error:
             return jsonify({"error": error}), 400
-        members = report["members"]
-        for m in members:
-            if "ai_text" not in m:
-                m["ai_text"] = ai_analyzer.member_activity_analysis(m).get("text", "")
-        return jsonify({"members": members})
+        return jsonify({"members": report["members"]})
 
     @app.route("/api/team/collaborators")
     @login_required
@@ -1023,6 +1110,48 @@ def register_api_routes(app: Flask) -> None:
         detail["ai"] = analysis.get("result") if analysis and analysis.get("result") else None
         return jsonify(detail)
 
+    @app.route("/api/code-review/pr/<int:number>")
+    @login_required
+    def api_code_review_pr_detail(number):
+        """Return a single pull request's detail for the Code Review page."""
+        owner, repo = _current_repo()
+        if not owner or not repo:
+            return jsonify({"error": "No repository selected."}), 400
+        api = get_api()
+        try:
+            detail = api.build_pr_detail(owner, repo, number)
+        except GitHubError as exc:
+            return jsonify({"error": exc.message}), 400
+        except Exception as exc:  # noqa: BLE001
+            app.logger.exception("Failed to load PR #%s for code review: %s", number, exc)
+            return jsonify({"error": "Unable to load PR details from GitHub."}), 500
+        try:
+            files = api.get_pr_files(owner, repo, number)
+            detail["files"] = [
+                {
+                    "filename": f.get("filename", ""),
+                    "status": f.get("status", ""),
+                    "additions": f.get("additions", 0),
+                    "deletions": f.get("deletions", 0),
+                }
+                for f in files[:50]
+            ]
+        except GitHubError:
+            detail["files"] = []
+        reviews = detail.get("reviews", [])
+        review_states = [r.get("state", "").upper() for r in reviews]
+        if "APPROVED" in review_states:
+            detail["review_status"] = "approved"
+        elif "CHANGES_REQUESTED" in review_states:
+            detail["review_status"] = "changes_requested"
+        elif review_states:
+            detail["review_status"] = "reviewed"
+        else:
+            detail["review_status"] = "no_reviews"
+        analysis = app.extensions["store"].find_analysis("pr", f"#{number}")
+        detail["ai"] = {"result": analysis["result"]} if analysis and analysis.get("result") else None
+        return jsonify(detail)
+
     @app.route("/api/refresh", methods=["POST"])
     @login_required
     def api_refresh():
@@ -1192,51 +1321,71 @@ def register_api_routes(app: Flask) -> None:
         )
         return jsonify(result)
 
-    @app.route("/api/ai/analyze-commit", methods=["POST"])
+    @app.route("/api/health")
     @login_required
-    def api_ai_analyze_commit():
-        """
-        Analyze a single commit: classify it (Normal / Risky / Bug-prone /
-        Large change / Suspicious / Needs review) and explain why.
+    def api_health():
+        """Return a computed repository health score from available data."""
+        report, error = _load_report()
+        if error:
+            return jsonify({"error": error}), 400
+        health = _compute_health_score(report)
+        return jsonify(health)
 
-        The commit is fetched live from GitHub by SHA so the analysis always
-        uses real data. A pre-fetched commit can also be supplied as
-        {commit: {...}} to avoid an extra API round-trip.
-        """
-        data = request.get_json(silent=True) or {}
-        owner, repo = _current_repo()
-        if not owner or not repo:
-            return jsonify({"error": "No repository selected."}), 400
-
-        commit = data.get("commit")
-        sha = (data.get("sha") or "").strip()
-        if not commit and not sha:
-            return jsonify({"error": "A commit sha is required."}), 400
-
-        api = get_api()
-        if not commit:
-            try:
-                commit = api.build_commit_detail(owner, repo, sha)
-            except GitHubError as exc:
-                return jsonify({"error": exc.message}), 400
-
-        result = ai_analyzer.analyze_commit(commit, context=f"{owner}/{repo}")
-        return jsonify(result)
-
-    @app.route("/api/ai/analyze-commits", methods=["POST"])
+    @app.route("/api/notifications")
     @login_required
-    def api_ai_analyze_commits():
-        """
-        Batch commit analysis. Accepts {commits: [...]} where each item has
-        the same shape as the dashboard's pushes entries, and returns one
-        analysis per commit.
-        """
-        data = request.get_json(silent=True) or {}
-        commits = data.get("commits") or []
-        if not isinstance(commits, list) or not commits:
-            return jsonify({"error": "A non-empty commits array is required."}), 400
-        results = ai_analyzer.analyze_commits(commits, context=_repo_full_name())
-        return jsonify({"analyses": results, "count": len(results)})
+    def api_notifications():
+        """Return recent notifications derived from analysis, scans, and webhooks."""
+        store = app.extensions["store"]
+        notifications = []
+        for a in store.list_analyses(limit=20):
+            sev = a.get("result", {}).get("severity", "")
+            if sev in ("high", "critical"):
+                notifications.append({
+                    "type": "critical",
+                    "title": f"Security finding: {a.get('target', '')}",
+                    "detail": a.get("result", {}).get("problem", a.get("result", {}).get("summary", "")),
+                    "time": a.get("created_at", ""),
+                    "icon": "\u26a0",
+                })
+            elif sev == "medium":
+                notifications.append({
+                    "type": "warning",
+                    "title": f"Issue detected in {a.get('target', '')}",
+                    "detail": a.get("result", {}).get("problem", a.get("result", {}).get("summary", "")),
+                    "time": a.get("created_at", ""),
+                    "icon": "\u2699",
+                })
+        for evt in app.extensions["recent_activity"]:
+            evt_type = evt.get("type", "")
+            if evt_type == "pull_request":
+                notifications.append({
+                    "type": "info",
+                    "title": f"PR {evt.get('action', '')}: {evt.get('title', '')}",
+                    "detail": f"@{evt.get('actor', '')} updated a pull request",
+                    "time": evt.get("date", ""),
+                    "icon": "\u21c4",
+                })
+            elif evt_type == "push":
+                notifications.append({
+                    "type": "success",
+                    "title": f"Push by @{evt.get('actor', '')}",
+                    "detail": evt.get("title", ""),
+                    "time": evt.get("date", ""),
+                    "icon": "\u2318",
+                })
+        scan_cache = app.extensions["scan_cache"]
+        scan_findings = scan_cache.get("data") or []
+        critical_findings = [f for f in scan_findings if f.get("severity") == "CRITICAL"]
+        if critical_findings:
+            notifications.append({
+                "type": "critical",
+                "title": f"{len(critical_findings)} critical security findings detected",
+                "detail": "Run a security scan to review findings.",
+                "time": "",
+                "icon": "\u26a0",
+            })
+        notifications.sort(key=lambda n: n.get("time", ""), reverse=True)
+        return jsonify({"notifications": notifications[:50]})
 
     @app.route("/api/ai/fix-pr", methods=["POST"])
     @login_required

@@ -224,9 +224,8 @@ def test_placeholder_pages_require_login(client):
         assert response.headers["Location"].endswith("/login")
 
 
-def test_placeholder_pages_render_coming_soon(client):
+def test_real_pages_render_with_sidebar(client):
     pages = [
-        ("/code-review", "Code Review"),
         ("/notifications", "Notifications"),
         ("/settings", "Settings"),
     ]
@@ -240,8 +239,30 @@ def test_placeholder_pages_render_coming_soon(client):
 
         assert response.status_code == 200
         assert title in html
-        assert "Coming Soon" in html
         assert "sidebar-nav" in html
+
+
+def test_code_review_requires_login(client):
+    response = client.get("/code-review")
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/login")
+
+
+def test_code_review_page_renders(client, monkeypatch):
+    monkeypatch.setattr(GitHubAPI, "build_team_report", lambda self, o, r: _member_report())
+    with client.session_transaction() as sess:
+        sess["github_token"] = "t"
+        sess["github_user"] = "alice"
+        sess["selected_repo"] = "o/r"
+
+    response = client.get("/code-review")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "Code Review" in html
+    assert "Pull Requests" in html
+    assert "Needs Review" in html
+    assert "sidebar-nav" in html
 
 
 def test_dashboard_renders_ai_tabs_with_rich_report(client, monkeypatch):
@@ -728,11 +749,8 @@ def test_dashboard_member_cards_link_to_team_members_page(client, monkeypatch):
     html = client.get("/dashboard").get_data(as_text=True)
 
     assert 'href="/team-members"' in html
-    assert 'href="/team-members?status=active"' in html
-    assert 'href="/team-members?status=inactive"' in html
-    assert "Total Members" in html
-    assert "Active Members" in html
-    assert "Inactive Members" in html
+    assert "Contributors" in html
+    assert "Members" in html
 
 
 # ======================================================================
@@ -811,7 +829,6 @@ def test_reports_export_unknown_format_returns_404(client, monkeypatch):
 
 
 # ======================================================================
-<<<<<<< HEAD
 # Issues API (live issues for the Issues page)
 # ======================================================================
 def test_api_issues_list_returns_normalized_issues(client, monkeypatch):
@@ -870,29 +887,10 @@ def test_api_issues_list_returns_normalized_issues(client, monkeypatch):
 
 def test_api_issues_list_requires_login(client):
     response = client.get("/api/issues/list")
-=======
-# Commit AI analysis endpoint
-# ======================================================================
-def _fake_commit_detail():
-    return {
-        "sha": "abc123",
-        "full_sha": "abc123def456",
-        "message": "Add unit tests for the parser module",
-        "author": "alice",
-        "date": "2026-01-01T00:00:00Z",
-        "files": [{"filename": "tests/test_parser.py"}],
-        "stats": {"additions": 30, "deletions": 2},
-    }
-
-
-def test_api_analyze_commit_requires_login(client):
-    response = client.post("/api/ai/analyze-commit", json={"sha": "abc123"})
->>>>>>> e441e47 (Update dashboard and AI analysis)
     assert response.status_code == 302
     assert response.headers["Location"].endswith("/login")
 
 
-<<<<<<< HEAD
 def test_api_issue_detail_includes_saved_analysis(client, monkeypatch):
     monkeypatch.setattr(
         GitHubAPI,
@@ -912,18 +910,12 @@ def test_api_issue_detail_includes_saved_analysis(client, monkeypatch):
             "created_at": "2024-02-01T00:00:00Z",
             "updated_at": "2024-02-01T00:00:00Z",
         },
-=======
-def test_api_analyze_commit_success(client, monkeypatch):
-    monkeypatch.setattr(
-        GitHubAPI, "build_commit_detail", lambda self, o, r, sha: _fake_commit_detail()
->>>>>>> e441e47 (Update dashboard and AI analysis)
     )
     with client.session_transaction() as sess:
         sess["github_token"] = "t"
         sess["github_user"] = "alice"
         sess["selected_repo"] = "o/r"
 
-<<<<<<< HEAD
     store = client.application.extensions["store"]
     store.save_analysis("issue", "#99", {"severity": "high", "engine": "rule-based"})
 
@@ -933,79 +925,3 @@ def test_api_analyze_commit_success(client, monkeypatch):
     assert response.status_code == 200
     assert detail["ai"]["severity"] == "high"
     assert detail["ai"]["engine"] == "rule-based"
-=======
-    response = client.post("/api/ai/analyze-commit", json={"sha": "abc123"})
-
-    assert response.status_code == 200
-    data = response.get_json()
-    assert data["sha"] == "abc123def456"
-    assert data["classification"] == "Normal"
-    assert data["engine"] == "rule-based"
-    assert data["severity"] == "low"
-
-
-def test_api_analyze_commit_requires_sha(client, monkeypatch):
-    with client.session_transaction() as sess:
-        sess["github_token"] = "t"
-        sess["github_user"] = "alice"
-        sess["selected_repo"] = "o/r"
-
-    response = client.post("/api/ai/analyze-commit", json={})
-
-    assert response.status_code == 400
-    assert "sha" in response.get_json()["error"]
-
-
-def test_api_analyze_commit_no_repo_selected(client, monkeypatch):
-    with client.session_transaction() as sess:
-        sess["github_token"] = "t"
-        sess["github_user"] = "alice"
-
-    response = client.post("/api/ai/analyze-commit", json={"sha": "abc123"})
-
-    assert response.status_code == 400
-
-
-def test_api_analyze_commit_github_error(client, monkeypatch):
-    from utils.github_api import GitHubError
-
-    def boom(self, owner, repo, sha):
-        raise GitHubError("Commit not found (HTTP 404).", status_code=404)
-
-    monkeypatch.setattr(GitHubAPI, "build_commit_detail", boom)
-    with client.session_transaction() as sess:
-        sess["github_token"] = "t"
-        sess["github_user"] = "alice"
-        sess["selected_repo"] = "o/r"
-
-    response = client.post("/api/ai/analyze-commit", json={"sha": "deadbeef"})
-
-    assert response.status_code == 400
-    assert "not found" in response.get_json()["error"]
-
-
-def test_api_analyze_commit_accepts_prefetched_commit(client, monkeypatch):
-    with client.session_transaction() as sess:
-        sess["github_token"] = "t"
-        sess["github_user"] = "alice"
-        sess["selected_repo"] = "o/r"
-
-    response = client.post(
-        "/api/ai/analyze-commit",
-        json={"sha": "abc123", "commit": _fake_commit_detail()},
-    )
-
-    assert response.status_code == 200
-    assert response.get_json()["classification"] == "Normal"
-
-
-def test_api_analyze_commits_batch_requires_non_empty(client, monkeypatch):
-    with client.session_transaction() as sess:
-        sess["github_token"] = "t"
-        sess["github_user"] = "alice"
-        sess["selected_repo"] = "o/r"
-
-    response = client.post("/api/ai/analyze-commits", json={"commits": []})
-
-    assert response.status_code == 400
->>>>>>> e441e47 (Update dashboard and AI analysis)

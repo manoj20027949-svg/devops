@@ -4,24 +4,22 @@
 {% block badge %}{{ report.repo.name if report else 'no data' }}{% endblock %}
 
 {% block topbar_extra %}
-<span class="badge badge-glass auto-refresh-badge" title="Auto-refreshes every 30 seconds">
-    <span id="lastUpdatedLabel">Last updated</span>
-    <time id="lastUpdatedTime">–</time>
-</span>
 <button type="button" class="btn btn-pulse btn-sm" id="refreshBtn" title="Re-fetch collaborators, commits, PRs, issues and events from GitHub">↻ Refresh</button>
 {% endblock %}
 
 {% block content %}
 
 {% if error or not report %}
-    <div class="glass p-4">
-        <h3>Unable to load dashboard</h3>
-        <p class="muted">{{ error or 'No repository selected. Pick a repository from the selector in the top bar.' }}</p>
-        <p class="muted">
-            Pick a repository from the selector in the top bar, then the dashboard
-            refreshes automatically. Make sure your token has access to the
-            repository (private repos need the <code>repo</code> scope).
-        </p>
+    <div class="glass card-pulse">
+        <div class="empty-state">
+            <div class="empty-state-icon">&#9888;</div>
+            <h3>Unable to load dashboard</h3>
+            <p>{{ error or 'No repository selected. Pick a repository from the selector in the top bar.' }}</p>
+            <p class="muted" style="font-size:0.82rem;">
+                Select a repository from the top bar selector. Ensure your token has access to the
+                repository (private repos need the <code>repo</code> scope).
+            </p>
+        </div>
     </div>
 {% else %}
 
@@ -32,166 +30,95 @@
 =============================================================== -->
 <section class="tab-pane active" id="tab-overview">
 
-    <!-- Stat cards -->
-    <div class="row g-4 stat-row">
-        <div class="col-6 col-xl-3">
-            <a href="#" class="stat-card-link" data-goto="tab-members" title="View Team Members">
-                <div class="glass card-pulse stat-card">
-                    <div class="stat-icon ic-blue">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-                    </div>
-                    <div class="stat-body">
-                        <span class="stat-value" id="statMembers">{{ report.overview.members }}</span>
-                        <span class="stat-label">Total Members</span>
-                    </div>
-                </div>
-            </a>
-        </div>
-        <div class="col-6 col-xl-3">
-            <a href="#" class="stat-card-link" data-goto="tab-members" title="View Team Members">
-                <div class="glass card-pulse stat-card">
-                    <div class="stat-icon ic-green">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="16 11 18 13 22 9"/></svg>
-                    </div>
-                    <div class="stat-body">
-                        <span class="stat-value" id="statActiveMembers">{{ report.overview.active_members|default(0) }}</span>
-                        <span class="stat-label">Active Members</span>
-                    </div>
-                </div>
-            </a>
-        </div>
-        <div class="col-6 col-xl-3">
-            <a href="#" class="stat-card-link" data-goto="tab-members" title="View Team Members">
+    <!-- Primary Summary Cards -->
+    <div class="row g-3 mb-4">
+        <div class="col-6 col-lg-3">
+            <a href="#" class="stat-card-link" data-goto="tab-issues" title="View Issues">
                 <div class="glass card-pulse stat-card">
                     <div class="stat-icon ic-orange">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="17" y1="8" x2="22" y2="13"/><line x1="22" y1="8" x2="17" y2="13"/></svg>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/></svg>
                     </div>
                     <div class="stat-body">
-                        <span class="stat-value" id="statInactiveMembers">{{ report.overview.inactive_members|default(0) }}</span>
-                        <span class="stat-label">Inactive Members</span>
+                        <span class="stat-value">{{ report.overview.open_issues|default(0) }}</span>
+                        <span class="stat-label">Issues</span>
+                        <div class="stat-sub">open</div>
                     </div>
                 </div>
             </a>
         </div>
-        <div class="col-6 col-xl-3">
+        <div class="col-6 col-lg-3">
+            <a href="#" class="stat-card-link" data-goto="tab-prs" title="View Pull Requests">
+                <div class="glass card-pulse stat-card">
+                    <div class="stat-icon ic-blue">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/></svg>
+                    </div>
+                    <div class="stat-body">
+                        <span class="stat-value">{{ report.overview.open_prs|default(0) }}</span>
+                        <span class="stat-label">Pull Requests</span>
+                        <div class="stat-sub">{{ report.overview.merged_prs|default(0) }} merged</div>
+                    </div>
+                </div>
+            </a>
+        </div>
+        <div class="col-6 col-lg-3">
             <a href="#" class="stat-card-link" data-goto="tab-commits" title="View Commits">
                 <div class="glass card-pulse stat-card">
                     <div class="stat-icon ic-purple">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><line x1="12" y1="3" x2="12" y2="8"/><line x1="12" y1="16" x2="12" y2="21"/></svg>
                     </div>
                     <div class="stat-body">
-                        <span class="stat-value" id="statCommits">{{ report.overview.total_commits }}</span>
-                        <span class="stat-label">Total Commits ({{ activity_window }}d)</span>
+                        <span class="stat-value">{{ report.overview.total_commits|default(0) }}</span>
+                        <span class="stat-label">Commits</span>
+                        <div class="stat-sub">last {{ activity_window }}d</div>
                     </div>
                 </div>
             </a>
         </div>
-        <div class="col-6 col-xl-3">
-            <a href="#" class="stat-card-link" data-goto="tab-prs" title="View Pull Requests">
-                <div class="glass card-pulse stat-card">
-                    <div class="stat-icon ic-blue">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/></svg>
-                    </div>
-                    <div class="stat-body">
-                        <span class="stat-value" id="statOpenPrs">{{ report.overview.open_prs }}</span>
-                        <span class="stat-label">Open Pull Requests</span>
-                    </div>
-                </div>
-            </a>
-        </div>
-        <div class="col-6 col-xl-3">
-            <a href="#" class="stat-card-link" data-goto="tab-prs" title="View Pull Requests">
+        <div class="col-6 col-lg-3">
+            <a href="{{ url_for('team_members') }}" class="stat-card-link" title="View Contributors">
                 <div class="glass card-pulse stat-card">
                     <div class="stat-icon ic-green">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg>
-                    </div>
-                    <div class="stat-body">
-                        <span class="stat-value" id="statMergedPrs">{{ report.overview.merged_prs|default(0) }}</span>
-                        <span class="stat-label">Merged Pull Requests</span>
-                    </div>
-                </div>
-            </a>
-        </div>
-        <div class="col-6 col-xl-3">
-            <a href="#" class="stat-card-link" data-goto="tab-issues" title="View Issues">
-                <div class="glass card-pulse stat-card">
-                    <div class="stat-icon ic-orange">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
-                    </div>
-                    <div class="stat-body">
-                        <span class="stat-value" id="statOpenIssues">{{ report.overview.open_issues }}</span>
-                        <span class="stat-label">Open Issues</span>
-                    </div>
-                </div>
-            </a>
-        </div>
-        <div class="col-6 col-xl-3">
-            <a href="#" class="stat-card-link" data-goto="tab-ai-analysis" title="View AI Analysis">
-                <div class="glass card-pulse stat-card">
-                    <div class="stat-icon ic-red">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
-                    </div>
-                    <div class="stat-body">
-                        <span class="stat-value" id="statAiErrors">{{ ai_errors_count }}</span>
-                        <span class="stat-label">AI Detected Errors</span>
-                    </div>
-                </div>
-            </a>
-        </div>
-        <div class="col-6 col-xl-3">
-            <a href="#" class="stat-card-link" data-goto="tab-ai-fixes" title="View AI Fixes">
-                <div class="glass card-pulse stat-card">
-                    <div class="stat-icon ic-green">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="m10 13.2 1.7 1.6 3.5-3.7"/></svg>
-                    </div>
-                    <div class="stat-body">
-                        <span class="stat-value" id="statAiFixed">{{ ai_fixed_count }}</span>
-                        <span class="stat-label">AI Fixed Issues (PRs)</span>
-                    </div>
-                </div>
-            </a>
-        </div>
-        <div class="col-6 col-xl-3">
-            <a href="#" class="stat-card-link" data-goto="tab-prs" title="View Pull Requests">
-                <div class="glass card-pulse stat-card">
-                    <div class="stat-icon ic-purple">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/></svg>
-                    </div>
-                    <div class="stat-body">
-                        <span class="stat-value" id="statTotalPrs">{{ report.overview.total_prs|default(0) }}</span>
-                        <span class="stat-label">Total Pull Requests</span>
-                    </div>
-                </div>
-            </a>
-        </div>
-        <div class="col-6 col-xl-3">
-            <a href="#" class="stat-card-link" data-goto="tab-members" title="View Team Members">
-                <div class="glass card-pulse stat-card">
-                    <div class="stat-icon ic-purple">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
                     </div>
                     <div class="stat-body">
-                        <span class="stat-value" id="statContributors">{{ report.overview.contributors_count|default(0) }}</span>
+                        <span class="stat-value">{{ report.overview.contributors_count|default(0) }}</span>
                         <span class="stat-label">Contributors</span>
+                        <div class="stat-sub">{{ report.overview.active_members|default(0) }} active</div>
                     </div>
                 </div>
             </a>
         </div>
-        <div class="col-6 col-xl-3">
-            <div class="glass card-pulse stat-card">
-                <div class="stat-icon ic-green">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
-                </div>
-                <div class="stat-body">
-                    <span class="stat-value" id="statLines">+{{ report.overview.total_additions|default(0) }} / −{{ report.overview.total_deletions|default(0) }}</span>
-                    <span class="stat-label">Lines Changed ({{ activity_window }}d)</span>
-                </div>
-            </div>
-        </div>
     </div>
 
-    <!-- Repo + languages + status -->
-    <div class="row g-4 mt-1">
+    <!-- Health Score + Activity + AI Insights Row -->
+    <div class="row g-3 mb-4">
+        <!-- Repository Health -->
+        <div class="col-lg-4">
+            <div class="glass card-pulse h-100">
+                <div class="card-header-row">
+                    <h2>Repository Health</h2>
+                    {% if health %}
+                    <div class="repo-health-score badge-status {{ 'st-active' if health.score >= 70 else ('st-merged' if health.score >= 45 else 'st-inactive') }}">{{ health.score }}</div>
+                    {% endif %}
+                </div>
+                {% if health %}
+                <p class="muted mb-3" style="font-size:0.85rem;">{{ health.summary }}</p>
+                {% for key, item in health.breakdown.items() %}
+                <div class="health-bar">
+                    <span class="health-bar-label">{{ item.label }}</span>
+                    <div class="health-bar-track">
+                        <div class="health-bar-fill" style="width: {{ (item.score / item.max * 100)|int }}%; background: {{ 'var(--green)' if item.score >= 18 else ('var(--accent)' if item.score >= 12 else 'var(--orange)') }};"></div>
+                    </div>
+                    <span class="health-bar-value" style="color: {{ 'var(--green)' if item.score >= 18 else ('var(--accent)' if item.score >= 12 else 'var(--orange)') }};">{{ item.score }}/{{ item.max }}</span>
+                </div>
+                {% endfor %}
+                {% else %}
+                <p class="muted mb-0">No data available for health scoring.</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Repository Info -->
         <div class="col-lg-4">
             <div class="glass card-pulse h-100">
                 <div class="card-header-row">
@@ -202,12 +129,123 @@
                     <div class="repo-name">
                         <a href="https://github.com/{{ report.repo.name }}" target="_blank" rel="noopener">{{ report.repo.name }}</a>
                     </div>
-                    {% if report.repo.description %}<p class="muted">{{ report.repo.description }}</p>{% endif %}
+                    {% if report.repo.description %}<p class="muted" style="font-size:0.85rem;">{{ report.repo.description }}</p>{% endif %}
                     <div class="repo-stats">
                         <span>★ {{ report.repo.stars }}</span>
                         <span>⑂ {{ report.repo.forks }}</span>
                         <span>◎ {{ report.repo.open_issues }}</span>
                     </div>
+                </div>
+                <div class="mt-3" style="display:flex; gap:8px; flex-wrap:wrap;">
+                    <a href="{{ url_for('code_review') }}" class="btn btn-pulse btn-sm">Code Review</a>
+                    <a href="{{ url_for('reports') }}" class="btn btn-outline-secondary btn-sm">Team Reports</a>
+                </div>
+            </div>
+        </div>
+
+        <!-- AI Insights -->
+        <div class="col-lg-4">
+            <div class="glass card-pulse h-100">
+                <div class="card-header-row">
+                    <h2>AI Insights</h2>
+                    <span class="badge badge-glass">{{ 'Claude' if ai_enabled else 'Rule-based' }}</span>
+                </div>
+                <div class="insights-list">
+                    {% if report.overview.open_issues|default(0) > 0 %}
+                    <div class="insight-item">
+                        <div class="insight-icon icon-warning">!</div>
+                        <div class="insight-body">
+                            <div class="insight-title"><strong>{{ report.overview.open_issues|default(0) }} open issues</strong></div>
+                            <div class="insight-detail">Issues need attention and resolution.</div>
+                        </div>
+                    </div>
+                    {% endif %}
+                    {% if report.overview.open_prs|default(0) > 0 %}
+                    <div class="insight-item">
+                        <div class="insight-icon icon-info">&#8644;</div>
+                        <div class="insight-body">
+                            <div class="insight-title"><strong>{{ report.overview.open_prs|default(0) }} pull requests open</strong></div>
+                            <div class="insight-detail">{{ report.overview.merged_prs|default(0) }} PRs merged recently.</div>
+                        </div>
+                    </div>
+                    {% endif %}
+                    {% if report.overview.active_members|default(0) > 0 %}
+                    <div class="insight-item">
+                        <div class="insight-icon icon-success">&#10003;</div>
+                        <div class="insight-body">
+                            <div class="insight-title"><strong>{{ report.overview.active_members|default(0) }} active contributors</strong></div>
+                            <div class="insight-detail">Team activity is {{ 'healthy' if report.overview.active_members|default(0) >= 3 else 'moderate' }}.</div>
+                        </div>
+                    </div>
+                    {% endif %}
+                    {% if ai_errors_count > 0 %}
+                    <div class="insight-item">
+                        <div class="insight-icon icon-danger">!</div>
+                        <div class="insight-body">
+                            <div class="insight-title"><strong>{{ ai_errors_count }} AI-detected issues</strong></div>
+                            <div class="insight-detail">Code quality concerns found by analysis.</div>
+                        </div>
+                    </div>
+                    {% endif %}
+                    {% if report.overview.total_commits|default(0) > 0 %}
+                    <div class="insight-item">
+                        <div class="insight-icon icon-success">&#8962;</div>
+                        <div class="insight-body">
+                            <div class="insight-title"><strong>{{ report.overview.total_commits|default(0) }} commits</strong></div>
+                            <div class="insight-detail">Active development in last {{ activity_window }} days.</div>
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Secondary Stats + Charts -->
+    <div class="row g-3 mb-4">
+        <div class="col-6 col-xl-2">
+            <a href="{{ url_for('team_members') }}" class="stat-card-link" title="View Team Members">
+                <div class="glass card-pulse stat-card">
+                    <div class="stat-icon ic-blue">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                    </div>
+                    <div class="stat-body">
+                        <span class="stat-value">{{ report.overview.members|default(0) }}</span>
+                        <span class="stat-label">Members</span>
+                    </div>
+                </div>
+            </a>
+        </div>
+        <div class="col-6 col-xl-2">
+            <div class="glass card-pulse stat-card">
+                <div class="stat-icon ic-red">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/></svg>
+                </div>
+                <div class="stat-body">
+                    <span class="stat-value">{{ ai_errors_count }}</span>
+                    <span class="stat-label">AI Errors</span>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-xl-2">
+            <div class="glass card-pulse stat-card">
+                <div class="stat-icon ic-green">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="m10 13.2 1.7 1.6 3.5-3.7"/></svg>
+                </div>
+                <div class="stat-body">
+                    <span class="stat-value">{{ ai_fixed_count }}</span>
+                    <span class="stat-label">AI Fixed</span>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-xl-2">
+            <div class="glass card-pulse stat-card">
+                <div class="stat-icon ic-green">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                </div>
+                <div class="stat-body">
+                    <span class="stat-value">+{{ report.overview.total_additions|default(0) }} / −{{ report.overview.total_deletions|default(0) }}</span>
+                    <span class="stat-label">Lines Changed</span>
                 </div>
             </div>
         </div>
@@ -220,13 +258,47 @@
                 <div class="chart-empty" id="langEmpty">No language data</div>
             </div>
         </div>
-        <div class="col-lg-4">
+    </div>
+
+    <!-- Member Status + Activity -->
+    <div class="row g-3">
+        <div class="col-lg-6">
             <div class="glass card-pulse h-100">
-                <div class="card-header-row"><h2>Member Status</h2></div>
+                <div class="card-header-row"><h2>Member Activity</h2></div>
                 <canvas id="statusChart" class="chart-canvas"
                         data-active="{{ report.overview.active_members|default(0) }}"
                         data-inactive="{{ report.overview.inactive_members|default(0) }}"></canvas>
                 <div class="chart-empty" id="statusEmpty">No member data</div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="glass card-pulse h-100">
+                <div class="card-header-row">
+                    <h2>Recent Activity</h2>
+                    <span class="badge badge-glass">{{ report.activity_feed|default([])|length }} events</span>
+                </div>
+                <div style="max-height: 300px; overflow-y: auto;">
+                {% set feed = report.activity_feed|default([]) %}
+                {% for ev in feed[:8] %}
+                <div class="feed-item" style="padding: 8px 12px;">
+                    <div class="feed-icon ic-{{ 'green' if ev.type == 'push' else ('purple' if ev.type == 'pull_request' else 'orange') }}" style="width:28px; height:28px; font-size:0.75rem;">{{ '&#8962;' if ev.type == 'push' else ('&#8644;' if ev.type == 'pull_request' else '&#9679;') }}</div>
+                    <div class="feed-body">
+                        <div class="feed-title" style="font-size:0.82rem;">
+                            <strong>@{{ ev.author }}</strong>
+                            <span class="muted">{{ ev.action }}</span>
+                        </div>
+                        <div class="feed-meta" style="font-size:0.74rem;">
+                            {{ ev.title|default('')|truncate(50) }}
+                            <span>{{ ev.relative or (ev.date or '')[:10] }}</span>
+                        </div>
+                    </div>
+                </div>
+                {% else %}
+                <div class="empty-state" style="padding: 24px;">
+                    <p class="muted mb-0">No recent activity.</p>
+                </div>
+                {% endfor %}
+                </div>
             </div>
         </div>
     </div>
@@ -262,7 +334,7 @@
                         </thead>
                         <tbody>
                             {% for m in report.members %}
-                            <tr class="hover-row" data-username="{{ m.username }}">
+                            <tr class="hover-row">
                                 <td>
                                     <div class="member-cell">
                                         <img class="avatar" src="{{ m.avatar or url_for('static', filename='images/default-avatar.svg') }}" alt="{{ m.username }}">
@@ -381,42 +453,6 @@
                 </div>
             </div>
         </div>
-<<<<<<< HEAD
-=======
-        <div class="col-lg-5">
-            <div class="glass card-pulse h-100">
-                <div class="card-header-row">
-                    <h2>Recent Activity (Webhooks)</h2>
-                    <div class="webhook-status">
-                        {% if webhook_configured %}
-                        <span class="badge badge-status badge-ok" title="GitHub webhooks are delivering events to this instance.">Webhook Connected</span>
-                        {% else %}
-                        <span class="badge badge-status badge-off" title="Webhooks are optional — activity is still fetched from the GitHub API.">Webhook Not Configured (Optional)</span>
-                        {% endif %}
-                        <span class="badge badge-glass">{{ recent_activity|length }} events</span>
-                    </div>
-                </div>
-                <div class="feed-list">
-                    {% for ev in recent_activity %}
-                    <div class="feed-item">
-                        <div class="feed-icon ic-green">⇄</div>
-                        <div class="feed-body">
-                            <div class="feed-title">{{ ev.summary|default(ev.event) }}</div>
-                            <div class="feed-meta muted">
-                                {{ ev.event }}{{ ' · ' ~ ev.action if ev.action }} · {{ (ev.created_at or '')[:19].replace('T', ' ') }}
-                            </div>
-                        </div>
-                    </div>
-                    {% else %}
-                    <div class="feed-empty">
-                        <p class="muted mb-1">No webhook events received yet.</p>
-                        <p class="muted small mb-0">Activity is still fetched from the GitHub API on every load, so webhooks are optional.</p>
-                    </div>
-                    {% endfor %}
-                </div>
-            </div>
-        </div>
->>>>>>> e441e47 (Update dashboard and AI analysis)
     </div>
 </section>
 
